@@ -91,10 +91,6 @@ func (r *reader) readDrawing(sc *storyCtx, d *El, rels Rels) (doc.Object, bool) 
 		if wsp == nil {
 			return doc.Object{}, false
 		}
-		// Not ported yet: colours in linear RGB (a:scrgbClr needs glibc's pow).
-		if !r.wspPorted(wsp) {
-			return doc.Object{}, false
-		}
 		obj = r.readWsp(sc, wsp, rels, w, h, float)
 		// A freeform: whether it's ink WordCraft wrote.
 		if sh, ok := obj.InlineObject.(doc.Shape); ok && sh.Freeform != nil && docPr != nil {
@@ -143,16 +139,6 @@ func (r *reader) readDrawing(sc *storyCtx, d *El, rels Rels) (doc.Object, bool) 
 		obj = doc.Object{InlineObject: v}
 	}
 	return obj, true
-}
-
-// wspPorted refuses (false) a shape whose reading isn't ported yet: colours in linear RGB
-// (a:scrgbClr needs glibc's pow).
-func (r *reader) wspPorted(wsp *El) bool {
-	if wsp.Find("a:scrgbClr") != nil {
-		r.unported("linear RGB colours (a:scrgbClr)")
-		return false
-	}
-	return true
 }
 
 // CanvasSpinExt is the a:ext URI under which WordCraft keeps a drawing canvas's rotation and
@@ -353,9 +339,6 @@ func (r *reader) groupMembers(sc *storyCtx, g *El, rels Rels, t [4]float32, dept
 			}
 			obj = o
 		} else {
-			if !r.wspPorted(e) {
-				return
-			}
 			obj = r.readWsp(sc, e, rels, w, h, float)
 			var id string
 			has := false
