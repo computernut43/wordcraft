@@ -1900,3 +1900,86 @@ func (r *reader) manifestBytes() doc.Vec[uint8] {
 	}
 	return doc.Vec[uint8](s.String())
 }
+
+const (
+	// maxEmbeddedIDs is the most relationship ids one object's markup may use.
+	maxEmbeddedIDs = 64
+	// maxEmbeddedXML is the longest markup kept for one object, bytes.
+	maxEmbeddedXML = 1024 * 1024
+)
+
+// keepEmbedded keeps el (an object's a:graphic or w:object, read with rels) and the parts it
+// refers to, so the object can be written back. extra names relationships the object's parts use
+// by id although its markup doesn't. False when it can't be written back faithfully: a
+// relationship it uses is missing, a part is missing, or it's too big.
+func (r *reader) keepEmbedded(el *El, rels Rels, extra []string) (*doc.Embedded, bool) {
+	var ids []string
+	if !relIDs(el, &ids, 0) {
+		return nil, false
+	}
+	refs := doc.Vec[doc.EmbeddedRef]{}
+	for _, id := range ids {
+		rel, ok := rels.ByID(id)
+		if !ok {
+			return nil, false
+		}
+		if !rel.External && !r.keepPartTree(rel.Target) {
+			return nil, false
+		}
+		refs = append(refs, doc.EmbeddedRef{ID: id, Kind: rel.Kind, Target: rel.Target, External: rel.External})
+	}
+	for _, id := range extra {
+		if slices.Contains(ids, id) {
+			continue
+		}
+		if rel, ok := rels.ByID(id); ok && !rel.External && r.keepPartTree(rel.Target) {
+			refs = append(refs, doc.EmbeddedRef{ID: id, Kind: rel.Kind, Target: rel.Target})
+		}
+	}
+	xml, ok := standaloneXML(el)
+	if !ok {
+		return nil, false
+	}
+	return &doc.Embedded{XML: xml, Refs: refs}, true
+}
+
+// relIDs gathers the relationship ids e uses (attributes in the relationships namespace, and
+// VML's o:relid), in document order. False past maxEmbeddedIDs.
+func relIDs(e *El, out *[]string, depth int) bool {
+	if depth > MaxDepth {
+		return true
+	}
+	for _, a := range e.Attrs {
+		if (strings.HasPrefix(a.Key, "r:") || a.Key == "o:relid") && !slices.Contains(*out, a.Val) {
+			if len(*out) >= maxEmbeddedIDs {
+				return false
+			}
+			*out = append(*out, a.Val)
+		}
+	}
+	for _, c := range e.Els() {
+		if !relIDs(c, out, depth+1) {
+			return false
+		}
+	}
+	return true
+}
+
+// standaloneXML is e as a standalone element: its XML with the namespace declarations its
+// canonical prefixes need. False when too long.
+func standaloneXML(e *El) (string, bool) {
+	xml := e.ToXML()
+	if xml == "" || 1+len(e.Name) > len(xml) {
+		return "", false
+	}
+	var s strings.Builder
+	s.WriteString("<" + e.Name)
+	for _, ns := range Namespaces {
+		s.WriteString(` xmlns:` + ns.Prefix + `="` + Esc(ns.URI) + `"`)
+	}
+	s.WriteString(xml[1+len(e.Name):])
+	if s.Len() > maxEmbeddedXML {
+		return "", false
+	}
+	return s.String(), true
+}

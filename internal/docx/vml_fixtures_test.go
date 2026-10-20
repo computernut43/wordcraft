@@ -5,6 +5,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -37,6 +38,15 @@ func TestVMLFixturesMatchRust(t *testing.T) {
 		`<v:shape style="width:100pt;height:80pt" path="m0,0l5,5`+strings.Repeat(" ", 1<<20)+`l9,9e"/>`,
 		big+`m 999999999999,0 r 999999999999,5 e"/>`,
 		big+`m0,0 l 99999999999999999,7 e"/>`)
+	// OLE objects at the relationship-id limit: with r:id, 64 ids (kept) and 65 (not kept).
+	for _, n := range []int{63, 64} {
+		var ids strings.Builder
+		for i := range n {
+			fmt.Fprintf(&ids, ` r:l%d="rIdL%d"`, i, i)
+		}
+		snippets = append(snippets, `<w:p><w:r><w:object><v:shape style="width:72pt;height:48pt"><v:imagedata r:id="rId8"/></v:shape>`+
+			`<o:OLEObject Type="Embed" ProgID="Excel.Sheet.12" r:id="rIdOle"`+ids.String()+`/></w:object></w:r></w:p>`)
+	}
 	var cases [][]byte
 	for _, s := range snippets {
 		body := s
@@ -50,8 +60,7 @@ func TestVMLFixturesMatchRust(t *testing.T) {
 	for i, c := range cases {
 		got := goRead(c)
 		if strings.HasPrefix(got, "REFUSED ") {
-			// OLE objects (w:object) show a VML picture but aren't ported yet.
-			t.Logf("fixture %d (%s): %s", i/2, []string{"body", "header"}[i%2], got)
+			t.Errorf("fixture %d (%s): %s", i/2, []string{"body", "header"}[i%2], got)
 			continue
 		}
 		compared++
@@ -65,7 +74,7 @@ func TestVMLFixturesMatchRust(t *testing.T) {
 			t.Errorf("fixture %d (%s) differs at byte %d:\nrust: …%.800s\ngo:   …%.800s", i/2, []string{"body", "header"}[i%2], at, a[from:], b[from:])
 		}
 	}
-	if compared < len(cases)-4 {
+	if compared < len(cases) {
 		t.Fatalf("only %d of %d fixtures compared", compared, len(cases))
 	}
 }
@@ -75,9 +84,14 @@ func TestVMLFixturesMatchRust(t *testing.T) {
 func vmlPackage(body, header string) []byte {
 	rels := []relSpec{{"rId8", relBase + "image", "media/image1.png", ""}, {"rId9", relBase + "image", "media/image2.png", ""},
 		{"rIdImg", relBase + "image", "media/image1.png", ""}, {"rIdP", relBase + "image", "media/image2.png", ""}}
+	rels = append(rels, relSpec{"rIdOle", relBase + "oleObject", "embeddings/oleObject1.bin", ""})
+	for i := range 65 {
+		rels = append(rels, relSpec{fmt.Sprintf("rIdL%d", i), relBase + "hyperlink", fmt.Sprintf("https://example.com/%d", i), "External"})
+	}
 	files := map[string]string{
-		"word/media/image1.png": "\x89PNG\r\n\x1a\nimage1",
-		"word/media/image2.png": "\x89PNG\r\n\x1a\nimage2",
+		"word/embeddings/oleObject1.bin": "\xd0\xcf\x11\xe0ole",
+		"word/media/image1.png":          "\x89PNG\r\n\x1a\nimage1",
+		"word/media/image2.png":          "\x89PNG\r\n\x1a\nimage2",
 	}
 	if header != "" {
 		rels = append(rels, relSpec{"rIdH", relBase + "header", "header1.xml", ""})

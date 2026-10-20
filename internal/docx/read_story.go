@@ -1,7 +1,7 @@
 package docx
 
 // Stories: blocks, paragraphs, runs, fields, tables (Rust crates/docx/src/read/story.rs).
-// OLE objects, ink and equations aren't ported yet: meeting one makes the read
+// Ink and equations aren't ported yet: meeting one makes the read
 // refuse the file.
 
 import (
@@ -810,7 +810,9 @@ func (r *reader) readRunChild(sc *storyCtx, pb *paraBuilder, k *El, props doc.Ch
 			r.emitObj(sc, pb, o, props)
 		}
 	case "w:object":
-		r.unported("embedded objects (w:object)")
+		if o, ok := r.readObject(sc, k, rels); ok {
+			r.emitObj(sc, pb, o, props)
+		}
 	case "w:contentPart":
 		r.unported("ink (w:contentPart)")
 	case "w:footnoteReference", "w:endnoteReference":
