@@ -4,7 +4,7 @@ go 1.26.0
 
 toolchain go1.27.3
 
-require github.com/computernut43/craft-libs v0.0.0-20261020015855-7479f09dace0
+require github.com/computernut43/craft-libs v0.0.0-20261020023813-0f4032d743c3
 
 require (
 	golang.org/x/mod v0.42.0 // indirect

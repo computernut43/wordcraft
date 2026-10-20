@@ -1,6 +1,6 @@
 # WordCraft: Rust → Go migration plan
 
-> **Status:** approved 2026-10-20; M0 done; M1 in progress (`geom` verified; document model M1a) · **Created:** 2026-10-20 · **Rust baseline:** `9b4b948` (computernut43/wordcraft `main`)
+> **Status:** approved 2026-10-20; M0 done; M1 in progress (`geom` verified; document model M1a; engine core and CLI M1b) · **Created:** 2026-10-20 · **Rust baseline:** `9b4b948` (computernut43/wordcraft `main`)
 >
 > This plan covers Phase 2 of the migration (planning). No Go code exists yet, and no Rust code is to be removed until
 > the matching Go code builds, passes its tests and has been reviewed (§9).
@@ -219,7 +219,7 @@ for `verified` rows.
 | RTF | ✓ | ✓ | `crates/formats/src/rtf.rs` | not started |
 | ODT | ✓ | ✓ | `crates/formats/src/odt.rs` | not started |
 | LaTeX | ✓ | ✓ | `crates/formats/src/latex.rs` | not started |
-| JSON (WordCraft model) | ✓ | ✓ | `crates/engine/src/io.rs` | not started |
+| JSON (WordCraft model) | ✓ | ✓ | `crates/engine/src/io.rs` | in progress (M1b): open (runs repaired, a paragraph to type in) and save (save metadata stamped, written atomically with craft-libs `atomic`). Documents Rust would repair or refresh in ways not ported yet (empty table cells or parts, unlocked DATE/TIME fields) are refused |
 | PDF | | ✓ | `crates/pdf` | not started |
 | PNG (page render) | | ✓ | `crates/render` | not started |
 | Mail-merge sources: CSV, XLSX/XLSM, ODS, XLS | ✓ | | `crates/formats/src/sheet*` (the XLS writer is a test fixture) | not started |
@@ -247,16 +247,16 @@ for `verified` rows.
 ### Engine and automation
 | Feature | Rust source | Status |
 |---|---|---|
-| `Session`, selection, undo/redo, Repeat, macro recording | `crates/engine/src/session.rs` | not started |
-| Command registry framework (`CommandSpec`, `enabled`, `mutates`) | `crates/engine/src/lib.rs` | not started |
-| Restrict Editing / protection checks | `crates/engine/src/cmd/protect.rs` | not started |
+| `Session`, selection, undo/redo, Repeat, macro recording | `crates/engine/src/session.rs` | in progress (M1b): `Session`, selection, undo/redo (500 steps, typing coalesced, a caret move ends the group), a failed or panicking command restores the session. Repeat and macro recording not started |
+| Command registry framework (`CommandSpec`, `enabled`, `mutates`) | `crates/engine/src/lib.rs` | in progress (M1b): `CommandSpec`, `Registry`, `Session.Run`. Ported commands: `text.insert`, `format.bold`, `select.text`, `select.range`, `select.collapse`, `edit.undo`, `edit.redo`, each covering the cases its doc comment lists and refusing the rest as not ported. **Verified** on those cases: random scripts run through both CLIs print the same results and errors and save the same documents (`TestRunMatchesRust`; 3,000 scripts and 11,882 steps checked locally, 1,000 in CI; six deliberate bugs, five caught by it and the sixth by a unit test); `TestHostileParamsNeverPanic`; `FuzzCommands` |
+| Restrict Editing / protection checks | `crates/engine/src/cmd/protect.rs` | not started (M1b refuses editing commands on protected documents) |
 | Commands by namespace (633 total, 36 namespaces): `para` 50, `table` 48, `insert` 44, `format` 39, `view` 36, `review` 35, `edit` 31, `file` 28, `outline` 26, `references` 25, `text` 22, `equation` 20, `mailings` 19, `layout` 18, `styles` 16, `draw` 16, `developer` 16, `caret` 16, `arrange` 15, `select` 14, `picture` 14, `tools` 11, `design` 11, `shape` 9, `smartArt` 8, `fields` 8, `readAloud` 7, `document` 6, `chart` 5, `wordArt` 4, `font` 4, `canvas` 4, `list` 3, `hf` 3, `object` 1, `link` 1 | `crates/engine/src/cmd/*.rs` | not started (tracked per namespace in `docs/go-port-commands.md`, created in M4) |
 | Word feature catalog and parity floor | `crates/engine/src/catalog.rs` | not started |
 | Typing parity (Enter, Backspace, Tab, AutoCorrect, AutoFormat) | `crates/engine/src/tests_typing.rs`, `docs/typing-parity.md` | not started |
 | Samples, templates | `crates/engine/src/sample.rs`, `cmd/templates.rs` | not started |
 | Crash recovery, safe save | `crates/engine/src/{recovery,io/safe_save}.rs` | not started |
 | Proofing per `ProofLang` (depth varies by language: e.g. English and Polish have spelling, grammar and hyphenation; Bulgarian has hyphenation only; Vietnamese is language detection only) | `crates/proof` | not started |
-| CLI | `apps/wordcraft-cli` | not started |
+| CLI | `apps/wordcraft-cli` | in progress (M1b): `convert IN OUT`, `run --file F --cmd ID[=JSON]… --print --save OUT` and `commands` for JSON documents, with Rust's output and error format. Other subcommands and options refused as not ported |
 | MCP server (headless and bridged) | `crates/mcp` | not started |
 | Control channel + keys | `crates/ui-egui/src/control.rs`, `crates/control-key` | not started |
 | Zotero integration | `crates/zotero` | not started |
@@ -397,6 +397,7 @@ strongest. Layout, render and UI come later, after the model is proven.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | M1b: `internal/engine` core (session, undo, registry, seven commands, JSON open/save) and `cmd/wordcraft-cli`, verified against the Rust CLI by random scripts |
 | 2026-10-20 | minor | M1a: `internal/doc` model with lossless JSON and paragraph edits, verified against Rust |
 | 2026-10-20 | minor | M1: `internal/geom` ported and verified against Rust |
 | 2026-10-20 | minor | M0 landed: Go module, `tools/ci` (shared gates from craft-libs + layers and assets ported from xtask), `internal/rustref` (checked against the real Rust CLI), Go workflow, agent instructions; craft-libs brought into scope; layer table corrected to the Rust gate's |

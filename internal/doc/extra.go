@@ -35,6 +35,13 @@ func (e Extra) Get(name string, v any) bool {
 	return ok && json.Unmarshal(raw, v) == nil
 }
 
+// Delete removes the named fields.
+func (e *Extra) Delete(names ...string) {
+	for _, n := range names {
+		e.set(n, nil)
+	}
+}
+
 // set stores v under name, or removes name when v is nil.
 func (e *Extra) set(name string, raw json.RawMessage) {
 	if raw == nil {

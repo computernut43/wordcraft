@@ -69,6 +69,7 @@ jobs:
         env:
           WORDCRAFT_GEOM_RUST: ${{ github.workspace }}/internal/geom/testdata/rust-oracle/target/release/geom-oracle
           WORDCRAFT_DOC_RUST: ${{ github.workspace }}/internal/doc/testdata/rust-oracle/target/release/doc-oracle
+          WORDCRAFT_CLI_SCRIPTS: "1000"
         run: |
           cli="$RUNNER_TEMP/rust-baseline/target/release/wordcraft-cli"
           sum="$(sha256sum "$cli" | cut -d' ' -f1)"
