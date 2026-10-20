@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['**.go', 'go.mod', 'go.sum', '**/testdata/**', 'ATTRIBUTION.md', 'assets/**', '.github/workflows/go.yml']
+    paths: ['**.go', 'go.mod', 'go.sum', '**/testdata/**', 'ATTRIBUTION.md', 'assets/**', 'crates/geom/**', '.github/workflows/go.yml']
   pull_request:
-    paths: ['**.go', 'go.mod', 'go.sum', '**/testdata/**', 'ATTRIBUTION.md', 'assets/**', '.github/workflows/go.yml']
+    paths: ['**.go', 'go.mod', 'go.sum', '**/testdata/**', 'ATTRIBUTION.md', 'assets/**', 'crates/geom/**', '.github/workflows/go.yml']
 
 permissions:
   contents: read
@@ -61,7 +61,11 @@ jobs:
       - name: Build the reference CLI
         working-directory: ${{ runner.temp }}/rust-baseline
         run: cargo build --release --locked -p wordcraft-cli
+      - name: Build the geom reference
+        run: cargo build --release --manifest-path internal/geom/testdata/rust-oracle/Cargo.toml
       - name: Go tests against the reference
+        env:
+          WORDCRAFT_GEOM_RUST: ${{ github.workspace }}/internal/geom/testdata/rust-oracle/target/release/geom-oracle
         run: |
           cli="$RUNNER_TEMP/rust-baseline/target/release/wordcraft-cli"
           export WORDCRAFT_RUST_CLI="$cli"
