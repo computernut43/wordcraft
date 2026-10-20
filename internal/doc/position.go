@@ -2,8 +2,10 @@ package doc
 
 import (
 	"cmp"
+
 	"encoding/json"
 	"errors"
+	"github.com/computernut43/craft-libs/serdejson"
 	"slices"
 	"strconv"
 	"strings"
@@ -40,6 +42,25 @@ func (s StoryRef) MarshalJSON() ([]byte, error) {
 		return []byte(`"body"`), nil
 	}
 	return json.Marshal(map[string]uint32{"part": *s.Part})
+}
+
+// DecodeSerde reads serde's externally tagged form: "body" or {"part": id}.
+func (s *StoryRef) DecodeSerde(d serdejson.Decoder) error {
+	var id uint32
+	i, err := serdejson.ExternallyTagged(d, []string{"body", "part"}, func(i int) bool { return i == 0 },
+		func(_ int, d serdejson.Decoder) error {
+			v, err := d.Uint(32)
+			id = uint32(v)
+			return err
+		})
+	if err != nil {
+		return err
+	}
+	*s = Body
+	if i == 1 {
+		*s = StoryRef{Part: &id}
+	}
+	return nil
 }
 
 // UnmarshalJSON reads "body" or {"part": id}.

@@ -50,13 +50,9 @@ type Session struct {
 	registry      *Registry
 }
 
-// New opens d in a session with the caret at the start of the body. It refuses documents
-// whose body starts with a table: the caret would be in a cell, which the model can't reach yet.
+// New opens d in a session with the caret at the start of the body.
 func New(d *doc.Document) (*Session, error) {
-	start, ok := d.StartOfBody()
-	if !ok {
-		return nil, notPorted("documents that start with a table")
-	}
+	start := d.StartOf(doc.Body)
 	return &Session{Doc: d, Sel: Caret(start), Author: "WordCraft User", registry: defaultRegistry}, nil
 }
 
