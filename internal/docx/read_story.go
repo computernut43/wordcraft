@@ -535,9 +535,25 @@ func (r *reader) readInlineChildren(sc *storyCtx, pb *paraBuilder, e *El, rels R
 	}
 }
 
-// hasDrawing reports whether e holds a drawing anywhere (what the ink and Office 2016 chart
-// readers look for; not ported yet).
-func hasDrawing(e *El) bool { return e.Find("w:drawing") != nil }
+// chartexURI is the a:graphicData URI of an Office 2016 chart (cx:chart).
+const chartexURI = "http://schemas.microsoft.com/office/drawing/2014/chartex"
+
+// hasDrawing reports alternate content that Rust reads as native ink (the selected choice's
+// drawing) or as an Office 2016 chart (any choice's drawing), which aren't ported yet.
+func hasDrawing(ac *El) bool {
+	uriOf := func(c *El) string {
+		if d := c.Child("w:drawing"); d != nil {
+			if g := d.Find("a:graphicData"); g != nil {
+				return attr(g, "uri")
+			}
+		}
+		return ""
+	}
+	if c := childrenOfChoice(ac); c != nil && c.Name == "mc:Choice" && uriOf(c) == inkURI {
+		return true
+	}
+	return slices.ContainsFunc(ac.Children("mc:Choice"), func(c *El) bool { return uriOf(c) == chartexURI })
+}
 
 func (r *reader) readInline(sc *storyCtx, pb *paraBuilder, k *El, rels Rels, ctx runCtx, depth int) {
 	switch k.Name {
@@ -630,7 +646,7 @@ func (r *reader) readInline(sc *storyCtx, pb *paraBuilder, k *El, rels Rels, ctx
 		r.unported("equations")
 	case "mc:AlternateContent":
 		if hasDrawing(k) {
-			r.unported("drawings in alternate content")
+			r.unported("ink and Office 2016 charts")
 		} else if c := childrenOfChoice(k); c != nil {
 			r.readInlineChildren(sc, pb, c, rels, ctx, depth+1)
 		}
@@ -784,7 +800,9 @@ func (r *reader) readRunChild(sc *storyCtx, pb *paraBuilder, k *El, props doc.Ch
 			r.endField(sc, pb)
 		}
 	case "w:drawing":
-		r.unported("drawings (w:drawing)")
+		if o, ok := r.readDrawing(k, rels); ok {
+			r.emitObj(sc, pb, o, props)
+		}
 	case "w:pict":
 		r.unported("VML pictures and shapes (w:pict)")
 	case "w:object":
@@ -838,7 +856,7 @@ func (r *reader) readRunChild(sc *storyCtx, pb *paraBuilder, k *El, props doc.Ch
 		r.readRuby(sc, pb, k, props)
 	case "mc:AlternateContent":
 		if hasDrawing(k) {
-			r.unported("drawings in alternate content")
+			r.unported("ink and Office 2016 charts")
 		} else if c := childrenOfChoice(k); c != nil {
 			for _, x := range c.Els() {
 				r.readRunChild(sc, pb, x, props, rels, note, depth+1)

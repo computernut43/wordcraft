@@ -17,6 +17,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/computernut43/craft-libs/rustcompat"
 )
 
 // Unit conversions.
@@ -330,8 +332,10 @@ func NewSpin(deg float32, flipH, flipV bool) Spin {
 // IsIdentity reports no rotation and no mirroring.
 func (s Spin) IsIdentity() bool { return NormalizeDegrees(s.Deg) == 0 && !s.FlipH && !s.FlipV }
 
+// sincos is Rust's f32 sin_cos (the platform's sinf and cosf; rustcompat gives Linux x86-64's on
+// every platform).
 func sincos(r float32) (float32, float32) {
-	return float32(math.Sin(float64(r))), float32(math.Cos(float64(r)))
+	return rustcompat.Sin32(r), rustcompat.Cos32(r)
 }
 
 // linear is the linear part (a, b, c, d: x' = a·x + c·y, y' = b·x + d·y).
