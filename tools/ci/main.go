@@ -94,9 +94,8 @@ func moduleRoot() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	want := []byte("module " + module + "\n")
 	for {
-		if data, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil && bytes.HasPrefix(data, want) {
+		if data, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil && isModule(data) {
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)
@@ -105,4 +104,11 @@ func moduleRoot() (string, error) {
 		}
 		dir = parent
 	}
+}
+
+// isModule reports whether go.mod's first line declares this module. Git on Windows checks files
+// out with CRLF line endings, so the line is compared without surrounding whitespace.
+func isModule(gomod []byte) bool {
+	first, _, _ := strings.Cut(string(gomod), "\n")
+	return strings.TrimSpace(first) == "module "+module
 }
