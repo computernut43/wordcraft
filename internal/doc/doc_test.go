@@ -78,11 +78,11 @@ func TestDeleteKeepsFormattingForTheMark(t *testing.T) {
 
 func TestDeleteRemovesObjects(t *testing.T) {
 	p := para("a￼b￼c", Run{Len: len("a￼b￼c")})
-	p.Objects = Vec[Raw]{Raw(`{"n":1}`), Raw(`{"n":2}`)}
+	p.Objects = Vec[Object]{{BookmarkStart{"one"}}, {BookmarkStart{"two"}}}
 	if err := p.Delete(1, 1+3+1); err != nil { // the first object and "b"
 		t.Fatal(err)
 	}
-	if p.Text != "a￼c" || len(p.Objects) != 1 || string(p.Objects[0]) != `{"n":2}` {
+	if p.Text != "a￼c" || len(p.Objects) != 1 || p.Objects[0] != (Object{BookmarkStart{"two"}}) {
 		t.Fatalf("%q %s", p.Text, p.Objects)
 	}
 }
@@ -132,11 +132,12 @@ func TestPropsAt(t *testing.T) {
 
 // TestJSONReadsAsRust: a document reads and writes as serde does: typed fields normalised
 // (12 is the f32 12.0, a colour given as hex is written [r, g, b]) and in Rust's field order,
-// unknown fields dropped, parts not typed yet (tables, styles, settings) kept as read.
+// unknown fields dropped, missing ones defaulted (a style sheet without styles gets the built-in
+// ones).
 func TestJSONReadsAsRust(t *testing.T) {
 	in := `{"styles":{"x":1},"body":[{"text":"Hi","runs":[{"len":2,"props":{"size":12,"bold":true,"color":"#ff0000","lang":"pl-PL","nope":1}}],` +
 		`"kind":"para","props":{"style":"Title","align":"center","lineSpacing":{"value":1.5,"rule":"multiple"}},"mark":{"italic":false}},` +
-		`{"kind":"table","rows":[], "x" : 1}],"settings":{"trackChanges":false},"unknown":[1]}`
+		`{"kind":"table","rows":[], "grid" : [1], "x" : 1}],"settings":{"trackChanges":false},"unknown":[1]}`
 	d, err := Unmarshal([]byte(in))
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +151,9 @@ func TestJSONReadsAsRust(t *testing.T) {
 	}
 	const body = `{"body":[{"kind":"para","text":"Hi","runs":[{"len":2,"props":{"size":12.0,"bold":true,"color":{"Rgb":[255,0,0]},"lang":"pl-PL"}}],` +
 		`"props":{"style":"Title","align":"center","lineSpacing":{"rule":"multiple","value":1.5}},"mark":{"italic":false}},` +
-		`{"kind":"table","rows":[],"x":1}],"lastSection":{"start":"nextPage","pageW":612.0,`
+		`{"kind":"table","props":{"style":null,"width":null,"widthPct":null,"align":null,"indent":null,"borders":null,"cellMargins":null,` +
+		`"fixed":false,"look":{"headerRow":true,"totalRow":false,"bandedRows":true,"firstColumn":true,"lastColumn":false,"bandedColumns":false},` +
+		`"shading":null,"caption":null},"grid":[1.0],"rows":[]}],"lastSection":{"start":"nextPage","pageW":612.0,`
 	if !strings.HasPrefix(string(out), body) {
 		t.Fatalf("got\n%s", out)
 	}
@@ -158,8 +161,8 @@ func TestJSONReadsAsRust(t *testing.T) {
 	if d.Settings.TrackChanges || !d.Settings.TrackMoves || d.Settings.DefaultTab != 36 || d.Settings.ThemeName != "Craft" {
 		t.Fatalf("settings %+v", d.Settings)
 	}
-	if !strings.Contains(string(out), `"styles":{"x":1}`) {
-		t.Fatalf("styles not kept: %s", out)
+	if len(d.Styles.Styles) == 0 || d.Styles.Styles[0].ID != "Normal" || len(d.Numbering.Nums) != 0 {
+		t.Fatal("a style sheet without styles has the built-in ones; no lists")
 	}
 }
 

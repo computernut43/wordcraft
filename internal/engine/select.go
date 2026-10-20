@@ -50,19 +50,8 @@ func selectRange(s *Session, p Params) (any, error) {
 	return s.SelResult(), nil
 }
 
-// clampPos is Rust Document::clamp for the positions the model can reach.
-func clampPos(d *doc.Document, p doc.Pos) (doc.Pos, error) {
-	if d.ParaAt(p) != nil {
-		return d.Clamp(p), nil
-	}
-	if _, complete := d.ParaPaths(); !complete {
-		return doc.Pos{}, notPorted("positions clamped in a document with tables")
-	}
-	if !p.Story.IsBody() {
-		return doc.Pos{}, notPorted("positions in other stories")
-	}
-	return d.Clamp(p), nil
-}
+// clampPos is Rust Document::clamp.
+func clampPos(d *doc.Document, p doc.Pos) (doc.Pos, error) { return d.Clamp(p), nil }
 
 // parsePos reads a position parameter as Rust's parse_pos: a serialized Pos ({"story", "path",
 // "off"}, or the array [story, path, off] serde also accepts), else {"block": n, "off"?: n} in

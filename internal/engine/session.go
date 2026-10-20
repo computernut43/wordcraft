@@ -50,13 +50,9 @@ type Session struct {
 	registry      *Registry
 }
 
-// New opens d in a session with the caret at the start of the body. It refuses documents
-// whose body starts with a table: the caret would be in a cell, which the model can't reach yet.
+// New opens d in a session with the caret at the start of the body.
 func New(d *doc.Document) (*Session, error) {
-	start, ok := d.StartOfBody()
-	if !ok {
-		return nil, notPorted("documents that start with a table")
-	}
+	start := d.StartOf(doc.Body)
 	return &Session{Doc: d, Sel: Caret(start), Author: "WordCraft User", registry: defaultRegistry}, nil
 }
 
@@ -200,12 +196,7 @@ func (s *Session) Run(id string, params Params) (result any, err error) {
 		}
 		if spec.Mutates {
 			s.Dirty = true
-			if !s.Doc.EnsureNonempty() {
-				s.Doc, s.Sel, s.Pending = before.doc, before.sel, before.pending
-				s.history, s.redo, s.typingOpen, s.evicted = before.history, before.redo, before.typingOpen, before.evicted
-				result, err = nil, notPorted("%s: repairing empty table cells or parts", id)
-				return
-			}
+			s.Doc.EnsureNonempty()
 		}
 		s.clampSelection()
 		// A selection command that moves the insertion point ends the typing group (#419).

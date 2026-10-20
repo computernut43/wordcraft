@@ -100,7 +100,7 @@ func typingPreconditions(s *Session) error {
 	}
 	a, b := s.Sel.Ordered()
 	para := s.Doc.ParaAt(a)
-	if para == nil || s.Doc.ParaAt(b) != para {
+	if para == nil || s.Doc.ParaAt(b) != para || !a.Story.IsBody() || len(a.Path) != 1 {
 		return notPorted("typing outside a single top-level body paragraph")
 	}
 	if strings.ContainsRune(para.Text, doc.Obj) {

@@ -1,7 +1,7 @@
 // Package doc is the WordCraft document model: the Go port of crates/doc, growing in steps
 // (MIGRATION.md §6). Its JSON is the Rust model's serde JSON, read and written with serdejson as
 // serde reads and writes it: what the Rust app reads, this reads the same way, and both write it
-// back the same, byte for byte. Parts not typed yet are Raw (kept as read).
+// back the same, byte for byte.
 //
 // Text is UTF-8 and offsets are byte offsets on character boundaries, as in Rust; a run's Len
 // counts bytes of its paragraph's Text.
@@ -46,14 +46,13 @@ func (e *Error) Error() string {
 
 func badOffset(off int) error { return &Error{Kind: BadOffset, Detail: fmt.Sprint(off)} }
 
-// Document is a whole document (crates/doc/src/lib.rs Document). Styles and numbering aren't
-// typed yet (Raw).
+// Document is a whole document (crates/doc/src/lib.rs Document).
 type Document struct {
 	Body        Vec[Block]      `json:"body"`
 	LastSection SectionProps    `json:"lastSection"`
 	Parts       U32Map[Part]    `json:"parts"`
-	Styles      Raw             `json:"styles,omitempty"`
-	Numbering   Raw             `json:"numbering,omitempty"`
+	Styles      StyleSheet      `json:"styles"`
+	Numbering   Numbering       `json:"numbering"`
 	Comments    U32Map[Comment] `json:"comments"`
 	Revisions   Vec[Revision]   `json:"revisions"`
 	Settings    Settings        `json:"settings"`
@@ -76,11 +75,20 @@ type U32Map[V any] = serdejson.U32Map[V]
 
 func (Document) SerdeDefault() {}
 
-// SetDefaults is the default of the typed fields (Rust Document::new): a body of one empty
-// paragraph, the default section and settings. Styles and numbering a file leaves out stay out
-// (Rust would fill in its built-in styles and empty numbering).
+// SetDefaults is Rust's Document::new(): a body of one empty paragraph, the default section and
+// settings, the built-in styles and no lists.
 func (d *Document) SetDefaults() {
-	*d = Document{Body: Vec[Block]{{Para: NewParagraph()}}, LastSection: NewSectionProps(), Settings: NewSettings()}
+	*d = Document{Body: Vec[Block]{{Para: NewParagraph()}}, LastSection: NewSectionProps(), Parts: U32Map[Part]{},
+		Styles: BuiltinStyles(), Comments: U32Map[Comment]{}, Revisions: Vec[Revision]{}, Settings: NewSettings(),
+		Sources: Vec[Source]{}, CustomProps: Vec[CustomProp]{}}
+	d.Numbering.SetDefaults()
+}
+
+// New is a blank document: one empty Normal paragraph, Letter, built-in styles.
+func New() *Document {
+	var d Document
+	d.SetDefaults()
+	return &d
 }
 
 // Unmarshal reads a document as the Rust app reads its .json files (serde_json::from_slice).
@@ -95,12 +103,12 @@ func Unmarshal(data []byte) (*Document, error) {
 // Marshal writes a document as the Rust app saves .json (serde_json::to_vec_pretty).
 func (d *Document) Marshal() ([]byte, error) { return serdejson.Marshal(d) }
 
-// Block is a paragraph or a table, written with its kind: {"kind": "para", …}. Tables aren't
-// typed yet.
+// Block is a paragraph or a table, written with its kind: {"kind": "para", …}. Exactly one is
+// set. Blocks are shared between undo snapshots, so the paragraph or table is never changed in
+// place: edit a Clone and replace the block.
 type Block struct {
-	Para *Paragraph
-	// Table is a table's fields (everything but the kind), as read.
-	Table Raw
+	Para  *Paragraph
+	Table *Table
 }
 
 var blockKinds = []string{"para", "table"}
@@ -127,11 +135,8 @@ func (b *Block) DecodeSerde(d serdejson.Decoder) error {
 		*b = Block{Para: p}
 		return nil
 	}
-	if rest.Peek() != serdejson.KindObject {
-		return rest.Fail("a table given as a sequence is not ported yet")
-	}
-	var t Raw
-	if err := rest.Decode(&t); err != nil {
+	t := new(Table)
+	if err := rest.Decode(t); err != nil {
 		return err
 	}
 	*b = Block{Table: t}
@@ -140,14 +145,16 @@ func (b *Block) DecodeSerde(d serdejson.Decoder) error {
 
 // MarshalJSON writes the kind, then the block's fields.
 func (b Block) MarshalJSON() ([]byte, error) {
-	var fields []byte
-	if b.Para != nil {
-		var err error
-		if fields, err = serdejson.MarshalCompact(b.Para); err != nil {
-			return nil, err
+	var v any = b.Para
+	if b.Para == nil {
+		if b.Table == nil {
+			return nil, errors.New("doc: empty block")
 		}
-	} else {
-		fields = b.Table
+		v = b.Table
+	}
+	fields, err := serdejson.MarshalCompact(v)
+	if err != nil {
+		return nil, err
 	}
 	if len(fields) < 2 || fields[0] != '{' {
 		return nil, errors.New("doc: empty block")
@@ -168,21 +175,21 @@ type Paragraph struct {
 	// Mark is the formatting of the paragraph mark (what typing into an empty paragraph gets).
 	Mark CharProps `json:"mark,omitzero" serde:"default"`
 	// Objects are the inline objects (pictures, fields, …), one per U+FFFC in Text, in order.
-	Objects Vec[Raw] `json:"objects,omitempty" serde:"default"`
+	Objects Vec[Object] `json:"objects,omitempty" serde:"default"`
 	// Section is set when this paragraph ends a section (OOXML keeps w:sectPr on the last
 	// paragraph).
-	Section *Raw `json:"section,omitempty" serde:"default"`
+	Section *SectionProps `json:"section,omitempty" serde:"default"`
 }
 
 // NewParagraph is an empty paragraph.
 func NewParagraph() *Paragraph { return &Paragraph{Runs: Vec[Run]{}} }
 
-// Clone copies the paragraph. Values behind pointers and Raw parts are never changed in place,
-// so they're shared.
+// Clone copies the paragraph. Values behind pointers and inline objects are never changed in
+// place, so they're shared.
 func (p *Paragraph) Clone() *Paragraph {
 	c := *p
 	c.Runs = append(Vec[Run](nil), p.Runs...)
-	c.Objects = append(Vec[Raw](nil), p.Objects...)
+	c.Objects = append(Vec[Object](nil), p.Objects...)
 	return &c
 }
 

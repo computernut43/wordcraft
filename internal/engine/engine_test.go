@@ -276,10 +276,11 @@ func TestSelectRangeClamps(t *testing.T) {
 	if e := runErr(t, s, "select.range", Params{"anchor": map[string]any{"block": json.Number("0")}}); e.Error() != "bad parameters: bad `focus`" {
 		t.Fatalf("got %q", e.Error())
 	}
-	// Clamping into a table isn't ported (the sample has one at block 13).
+	// Block 13 of the sample is a table: the position moves to the last paragraph before it.
 	sm := sample(t)
-	if e := runErr(t, sm, "select.range", Params{"anchor": map[string]any{"block": json.Number("13")}, "focus": map[string]any{"block": json.Number("0")}}); e.Kind != NotPorted {
-		t.Fatalf("got %v", e)
+	run(t, sm, "select.range", `{"anchor":{"block":13},"focus":{"block":0}}`)
+	if !sm.Sel.Anchor.Path.Equal(doc.Path{12}) || sm.Doc.Para(doc.Body, doc.Path{13}) != nil {
+		t.Fatalf("%+v", sm.Sel)
 	}
 	run(t, s, "select.range", `{"anchor":{"block":0,"off":0},"focus":{"block":1,"off":3}}`)
 	run(t, s, "select.collapse", `{"end":true}`)
