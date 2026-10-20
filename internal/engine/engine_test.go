@@ -315,11 +315,13 @@ func TestTextInsertRefusals(t *testing.T) {
 
 func TestTrackChangesAndProtectionRefused(t *testing.T) {
 	s := session(t, "abc")
-	s.Doc.Settings = doc.Raw(`{"trackChanges":true}`)
+	s.Doc.Settings.TrackChanges = true
 	if e := runErr(t, s, "text.insert", Params{"text": "x"}); e.Kind != NotPorted {
 		t.Fatalf("got %v", e)
 	}
-	s.Doc.Settings = doc.Raw(`{"protection":"readOnly"}`)
+	s.Doc.Settings.TrackChanges = false
+	readOnly := "readOnly"
+	s.Doc.Settings.Protection = &readOnly
 	if e := runErr(t, s, "format.bold", Params{"value": true}); e.Kind != NotPorted {
 		t.Fatalf("got %v", e)
 	}
@@ -419,8 +421,9 @@ func TestOpenAndSave(t *testing.T) {
 func TestStampSave(t *testing.T) {
 	d := &doc.Document{
 		Core:     doc.CoreProps{Revision: 4294967295, Title: "T"},
-		Settings: doc.Raw(`{"zoom":150,"trackChanges":false,"mirrorMargins":true}`),
+		Settings: doc.NewSettings(),
 	}
+	d.Settings.Zoom = &doc.Zoom{Percent: 150}
 	if err := stampSave(d, "Ann", mustTime(t)); err != nil {
 		t.Fatal(err)
 	}
@@ -428,9 +431,8 @@ func TestStampSave(t *testing.T) {
 	if c.Revision != 4294967295 || c.Created != "2026-01-02T03:04:05Z" || c.Modified != c.Created || c.Title != "T" || c.LastModifiedBy != "Ann" {
 		t.Fatalf("core %+v", c)
 	}
-	// The zoom goes; the other settings stay, in their order.
-	if got := string(d.Settings); got != `{"trackChanges":false,"mirrorMargins":true}` {
-		t.Fatalf("settings %s", got)
+	if d.Settings.Zoom != nil {
+		t.Fatal("zoom kept")
 	}
 }
 

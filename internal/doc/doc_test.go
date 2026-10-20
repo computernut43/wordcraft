@@ -148,12 +148,18 @@ func TestJSONReadsAsRust(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = `{"body":[{"kind":"para","text":"Hi","runs":[{"len":2,"props":{"size":12.0,"bold":true,"color":{"Rgb":[255,0,0]},"lang":"pl-PL"}}],` +
+	const body = `{"body":[{"kind":"para","text":"Hi","runs":[{"len":2,"props":{"size":12.0,"bold":true,"color":{"Rgb":[255,0,0]},"lang":"pl-PL"}}],` +
 		`"props":{"style":"Title","align":"center","lineSpacing":{"rule":"multiple","value":1.5}},"mark":{"italic":false}},` +
-		`{"kind":"table","rows":[],"x":1}],"styles":{"x":1},"settings":{"trackChanges":false},"core":{"title":"","subject":"","creator":"",` +
-		`"keywords":"","description":"","category":"","lastModifiedBy":"","created":"","modified":"","revision":0}}`
-	if string(out) != want {
-		t.Fatalf("got\n%s\nwant\n%s", out, want)
+		`{"kind":"table","rows":[],"x":1}],"lastSection":{"start":"nextPage","pageW":612.0,`
+	if !strings.HasPrefix(string(out), body) {
+		t.Fatalf("got\n%s", out)
+	}
+	// Missing settings fields take Rust's defaults.
+	if d.Settings.TrackChanges || !d.Settings.TrackMoves || d.Settings.DefaultTab != 36 || d.Settings.ThemeName != "Craft" {
+		t.Fatalf("settings %+v", d.Settings)
+	}
+	if !strings.Contains(string(out), `"styles":{"x":1}`) {
+		t.Fatalf("styles not kept: %s", out)
 	}
 }
 

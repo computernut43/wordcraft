@@ -187,9 +187,10 @@ func (d *Document) NormalizeRuns() {
 	}
 }
 
-// EnsureNonempty gives the body a paragraph to type in when it has none or ends with a table, as
-// Rust's ensure_nonempty does after every edit. ok is false when Rust would also repair something
-// the model can't change yet (an empty or table-ended table cell, an empty part).
+// EnsureNonempty gives the body a paragraph to type in when it has none or ends with a table,
+// and every empty part one, as Rust's ensure_nonempty does after every edit. ok is false when
+// Rust would also repair something the model can't change yet (an empty or table-ended table
+// cell).
 func (d *Document) EnsureNonempty() (ok bool) {
 	ok = !d.needsUnmodelledRepair()
 	hasPara := false
@@ -201,6 +202,20 @@ func (d *Document) EnsureNonempty() (ok bool) {
 	if !hasPara || (len(d.Body) > 0 && d.Body[len(d.Body)-1].Para == nil) {
 		d.Body = append(d.Body, Block{Para: NewParagraph()})
 	}
+	for _, p := range d.Parts {
+		if len(p.Blocks) == 0 {
+			// The map may be shared with an undo snapshot: repair a copy.
+			parts := make(U32Map[Part], len(d.Parts))
+			for id, p := range d.Parts {
+				if len(p.Blocks) == 0 {
+					p.Blocks = Vec[Block]{{Para: NewParagraph()}}
+				}
+				parts[id] = p
+			}
+			d.Parts = parts
+			break
+		}
+	}
 	return ok
 }
 
@@ -210,6 +225,7 @@ type rawBlocks struct {
 	} `json:"blocks"`
 }
 
+// needsUnmodelledRepair reports a top-level table with an empty or table-ended cell.
 func (d *Document) needsUnmodelledRepair() bool {
 	for _, b := range d.Body {
 		if b.Para != nil {
@@ -228,14 +244,6 @@ func (d *Document) needsUnmodelledRepair() bool {
 				if len(c.Blocks) == 0 || c.Blocks[len(c.Blocks)-1].Kind == "table" {
 					return true
 				}
-			}
-		}
-	}
-	var parts map[string]rawBlocks
-	if d.Parts.Get(&parts) {
-		for _, p := range parts {
-			if len(p.Blocks) == 0 {
-				return true
 			}
 		}
 	}

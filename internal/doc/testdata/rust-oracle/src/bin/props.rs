@@ -10,12 +10,20 @@
 // a.cleared(), a.formatting(), a.without_symbol(); Q takes a ParaProps pair and writes
 // a.overlaid(&b); B takes a Borders pair and writes a after a.overlay(&b); E takes a CharProps and
 // writes [is_empty, shown_font].
+//
+// Sections and settings: s, g, P, C, R, K, S, X, T read a SectionProps, Settings, Part, Comment,
+// Revision, BuildingBlock, Source, CustomProp or TextBody and write it back. N takes
+// [NumFormat, n] and writes format(n) and ooxml(); m takes [SectionProps, font size] and writes
+// its measurements, column boxes and the section turned landscape/portrait; A takes
+// [SectionProps, SectionProps] and writes a after a.absorb(&b); G takes [pitch, font size] and
+// writes DocGrid::char_space_for; I takes a TextBody and writes insets_pt().
 use std::io::{Read, Write};
 
 use serde::Serialize;
 use wordcraft_doc::props::{Borders, CellProps, CharProps, ParaProps, RowProps, TableProps};
+use wordcraft_doc::section::{DocGrid, NumFormat, SectionProps};
 use wordcraft_doc::wordart::TextEffects;
-use wordcraft_doc::{Block, CoreProps, Document};
+use wordcraft_doc::{Block, BuildingBlock, Comment, CoreProps, CustomProp, Document, Part, Revision, Settings, Source, TextBody};
 
 fn show<T: Serialize>(v: &T) -> String {
     serde_json::to_string_pretty(v).map(|s| s.replace('\\', "\\\\").replace('\n', "\\n")).unwrap_or_else(|e| format!("SERIALIZE {e}"))
@@ -59,6 +67,51 @@ fn answer(op: u8, json: &[u8]) -> String {
                 a.overlay(&b);
                 show(&a)
             }
+            Err(_) => "ERROR".into(),
+        },
+        b's' => read::<SectionProps>(json),
+        b'g' => read::<Settings>(json),
+        b'P' => read::<Part>(json),
+        b'C' => read::<Comment>(json),
+        b'R' => read::<Revision>(json),
+        b'K' => read::<BuildingBlock>(json),
+        b'S' => read::<Source>(json),
+        b'X' => read::<CustomProp>(json),
+        b'T' => read::<TextBody>(json),
+        b'N' => match serde_json::from_slice::<(NumFormat, u32)>(json) {
+            Ok((f, n)) => show(&(f.format(n), f.ooxml(), NumFormat::from_ooxml(f.ooxml()))),
+            Err(_) => "ERROR".into(),
+        },
+        b'm' => match serde_json::from_slice::<(SectionProps, f32)>(json) {
+            Ok((mut s, size)) => {
+                let measured = (
+                    s.text_width(),
+                    s.text_height(),
+                    s.grid_line_pitch(),
+                    s.grid_char_pitch(size),
+                    s.grid_lines_per_page(),
+                    s.grid_chars_per_line(size),
+                    s.column_boxes(),
+                );
+                let landscape = !s.landscape;
+                s.set_landscape(landscape);
+                show(&(measured, s))
+            }
+            Err(_) => "ERROR".into(),
+        },
+        b'A' => match serde_json::from_slice::<(SectionProps, SectionProps)>(json) {
+            Ok((mut a, b)) => {
+                a.absorb(&b);
+                show(&a)
+            }
+            Err(_) => "ERROR".into(),
+        },
+        b'G' => match serde_json::from_slice::<(f32, f32)>(json) {
+            Ok((pitch, size)) => show(&DocGrid::char_space_for(pitch, size)),
+            Err(_) => "ERROR".into(),
+        },
+        b'I' => match serde_json::from_slice::<TextBody>(json) {
+            Ok(t) => show(&t.insets_pt()),
             Err(_) => "ERROR".into(),
         },
         _ => "BAD OP".into(),

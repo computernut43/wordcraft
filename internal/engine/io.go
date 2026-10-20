@@ -37,7 +37,7 @@ func OpenBytes(name string, data []byte) (*doc.Document, error) {
 	}
 	d.NormalizeRuns()
 	if !d.EnsureNonempty() {
-		return nil, notPorted("documents with empty table cells or parts")
+		return nil, notPorted("documents with empty table cells")
 	}
 	if d.NeedsDateRefresh() {
 		return nil, notPorted("documents with DATE or TIME fields (opening refreshes them)")
@@ -95,13 +95,7 @@ func (s *Session) Save(path string) error {
 // session shows it at 100%, saved as no zoom), the modified time, the creation time when there is
 // none, who modified it last and the revision count.
 func stampSave(d *doc.Document, author string, now time.Time) error {
-	if d.Settings != nil {
-		settings, err := d.Settings.WithoutKey("zoom")
-		if err != nil {
-			return err
-		}
-		d.Settings = settings
-	}
+	d.Settings.Zoom = nil
 	c := &d.Core
 	c.Modified = now.UTC().Format("2006-01-02T15:04:05Z")
 	if c.Created == "" {

@@ -46,35 +46,42 @@ func (e *Error) Error() string {
 
 func badOffset(off int) error { return &Error{Kind: BadOffset, Detail: fmt.Sprint(off)} }
 
-// Document is a whole document (crates/doc/src/lib.rs Document). The body, the core
-// properties, the note separators and the media are typed; the rest is Raw.
+// Document is a whole document (crates/doc/src/lib.rs Document). Styles and numbering aren't
+// typed yet (Raw).
 type Document struct {
-	Body               Vec[Block]         `json:"body"`
-	LastSection        Raw                `json:"lastSection,omitempty"`
-	Parts              Raw                `json:"parts,omitempty"`
-	Styles             Raw                `json:"styles,omitempty"`
-	Numbering          Raw                `json:"numbering,omitempty"`
-	Comments           Raw                `json:"comments,omitempty"`
-	Revisions          Raw                `json:"revisions,omitempty"`
-	Settings           Raw                `json:"settings,omitempty"`
-	Core               CoreProps          `json:"core"`
-	Sources            Raw                `json:"sources,omitempty"`
-	CustomProps        Raw                `json:"customProps,omitempty"`
+	Body        Vec[Block]      `json:"body"`
+	LastSection SectionProps    `json:"lastSection"`
+	Parts       U32Map[Part]    `json:"parts"`
+	Styles      Raw             `json:"styles,omitempty"`
+	Numbering   Raw             `json:"numbering,omitempty"`
+	Comments    U32Map[Comment] `json:"comments"`
+	Revisions   Vec[Revision]   `json:"revisions"`
+	Settings    Settings        `json:"settings"`
+	Core        CoreProps       `json:"core"`
+	Sources     Vec[Source]     `json:"sources"`
+	CustomProps Vec[CustomProp] `json:"customProps"`
+	// FootnoteSeparators and EndnoteSeparators are the document's own note separators.
 	FootnoteSeparators NoteSeparators     `json:"footnoteSeparators,omitzero"`
 	EndnoteSeparators  NoteSeparators     `json:"endnoteSeparators,omitzero"`
 	Media              StrMap[Vec[uint8]] `json:"media,omitempty"`
 	Passthrough        StrMap[Vec[uint8]] `json:"passthrough,omitempty"`
-	Glossary           Vec[Raw]           `json:"glossary,omitempty"`
+	Glossary           Vec[BuildingBlock] `json:"glossary,omitempty"`
 }
 
 // StrMap is a Rust BTreeMap<String, V>.
 type StrMap[V any] = serdejson.StrMap[V]
 
+// U32Map is a Rust BTreeMap<u32, V>.
+type U32Map[V any] = serdejson.U32Map[V]
+
 func (Document) SerdeDefault() {}
 
 // SetDefaults is the default of the typed fields (Rust Document::new): a body of one empty
-// paragraph. A Raw part a file leaves out stays out (Rust would fill in its default).
-func (d *Document) SetDefaults() { *d = Document{Body: Vec[Block]{{Para: NewParagraph()}}} }
+// paragraph, the default section and settings. Styles and numbering a file leaves out stay out
+// (Rust would fill in its built-in styles and empty numbering).
+func (d *Document) SetDefaults() {
+	*d = Document{Body: Vec[Block]{{Para: NewParagraph()}}, LastSection: NewSectionProps(), Settings: NewSettings()}
+}
 
 // Unmarshal reads a document as the Rust app reads its .json files (serde_json::from_slice).
 func Unmarshal(data []byte) (*Document, error) {

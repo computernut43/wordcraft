@@ -99,7 +99,7 @@ func TestPropsMatchRust(t *testing.T) {
 
 func readCounts(m map[byte]int) string {
 	var b strings.Builder
-	for _, op := range "cptrexkbdOMULFWEQB" {
+	for _, op := range "cptrexkbdOMULFWEQBsgPCRKSXTNmAGI" {
 		b.WriteString(string(op) + "=" + strconv.Itoa(m[byte(op)]) + " ")
 	}
 	return b.String()
@@ -116,8 +116,7 @@ func untypedParts(pretty string) (string, error) {
 	for _, f := range []struct {
 		name string
 		raw  Raw
-	}{{"lastSection", d.LastSection}, {"parts", d.Parts}, {"styles", d.Styles}, {"numbering", d.Numbering}, {"comments", d.Comments},
-		{"revisions", d.Revisions}, {"settings", d.Settings}, {"sources", d.Sources}, {"customProps", d.CustomProps}} {
+	}{{"styles", d.Styles}, {"numbering", d.Numbering}} {
 		b.WriteString(`,"` + f.name + `":` + string(f.raw))
 	}
 	return b.String(), nil
@@ -207,6 +206,75 @@ func propsAnswer(x []byte) string {
 		}
 		pair[0].Overlay(&pair[1])
 		return show(pair[0])
+	case 's':
+		v = new(SectionProps)
+	case 'g':
+		v = new(Settings)
+	case 'P':
+		v = new(Part)
+	case 'C':
+		v = new(Comment)
+	case 'R':
+		v = new(Revision)
+	case 'K':
+		v = new(BuildingBlock)
+	case 'S':
+		v = new(Source)
+	case 'X':
+		v = new(CustomProp)
+	case 'T':
+		v = new(TextBody)
+	case 'N':
+		var in struct {
+			F NumFormat
+			N uint32
+		}
+		if serdejson.Unmarshal(js, &in) != nil {
+			return "ERROR"
+		}
+		return show([]any{in.F.Format(in.N), in.F.OOXML(), NumFormatFromOOXML(in.F.OOXML())})
+	case 'm':
+		var in struct {
+			S    SectionProps
+			Size F32
+		}
+		if serdejson.Unmarshal(js, &in) != nil {
+			return "ERROR"
+		}
+		s := &in.S
+		opt := func(v F32, ok bool) *F32 {
+			if !ok {
+				return nil
+			}
+			return &v
+		}
+		var boxes Vec[[2]F32]
+		for _, b := range s.ColumnBoxes() {
+			boxes = append(boxes, [2]F32{b.X, b.W})
+		}
+		measured := []any{s.TextWidth(), s.TextHeight(), opt(s.GridLinePitch()), opt(s.GridCharPitch(in.Size)), s.GridLinesPerPage(),
+			s.GridCharsPerLine(in.Size), boxes}
+		s.SetLandscape(!s.Landscape)
+		return show([]any{measured, s})
+	case 'A':
+		var pair [2]SectionProps
+		if serdejson.Unmarshal(js, &pair) != nil {
+			return "ERROR"
+		}
+		pair[0].Absorb(&pair[1])
+		return show(pair[0])
+	case 'G':
+		var pair [2]F32
+		if serdejson.Unmarshal(js, &pair) != nil {
+			return "ERROR"
+		}
+		return show(CharSpaceFor(pair[0], pair[1]))
+	case 'I':
+		var t TextBody
+		if serdejson.Unmarshal(js, &t) != nil {
+			return "ERROR"
+		}
+		return show(t.InsetsPt())
 	default:
 		return "BAD OP"
 	}
@@ -701,6 +769,138 @@ func (g *pgen) block() {
 	g.object(all)
 }
 
+func (g *pgen) noteProps() {
+	g.object([]pfield{opt("pos", g.enumOf(notePosNames)), opt("numFmt", g.enumOf(numFormatNames)), opt("numStart", func(g *pgen) { g.uint(32) }),
+		opt("numRestart", g.enumOf(noteRestartNames))})
+}
+
+func (g *pgen) sectionProps() {
+	b, f, u := (*pgen).boolean, (*pgen).f32, func(g *pgen) { g.uint(32) }
+	headers := func(g *pgen) { g.object([]pfield{opt("default", u), opt("first", u), opt("even", u)}) }
+	g.object([]pfield{
+		dflt("start", g.enumOf(sectionStartNames)), dflt("pageW", f), dflt("pageH", f), dflt("landscape", b), dflt("marginTop", f),
+		dflt("marginBottom", f), dflt("marginLeft", f), dflt("marginRight", f), dflt("header", f), dflt("footer", f), dflt("gutter", f),
+		dflt("columns", func(g *pgen) {
+			g.object([]pfield{dflt("count", func(g *pgen) { g.w(g.pick("0", "1", "2", "3", "45", "46", "4294967295")) }), dflt("space", f),
+				dflt("separator", b), dflt("widths", func(g *pgen) {
+					g.list(func(g *pgen) {
+						g.w("[")
+						g.f32()
+						g.w(",")
+						g.f32()
+						g.w("]")
+					})
+				})})
+		}),
+		dflt("headers", headers), dflt("footers", headers), dflt("titlePage", b), opt("pageNumStart", u),
+		dflt("pageNumFormat", g.enumOf(numFormatNames)), dflt("pageNumSet", b), opt("lineNumbers", func(g *pgen) {
+			g.object([]pfield{dflt("countBy", u), dflt("start", u), dflt("distance", f), dflt("restart", g.enumOf(lineNumberRestartNames))})
+		}),
+		dflt("valign", g.enumOf([]string{"top", "center", "justify", "bottom", "both", "justified"})), opt("formProt", b),
+		opt("pageBorders", (*pgen).borders), dflt("rtl", b), dflt("textDirection", g.enumOf(textDirectionNames)), dflt("textDirectionSet", b),
+		opt("fmtChange", func(g *pgen) { g.propChange((*pgen).sectionProps) }), opt("docGrid", func(g *pgen) {
+			g.object([]pfield{dflt("type", g.enumOf(docGridTypeNames)), dflt("linePitch", f), dflt("charSpace", (*pgen).i32)})
+		}),
+		dflt("footnotePr", (*pgen).noteProps), dflt("endnotePr", (*pgen).noteProps),
+	})
+}
+
+func (g *pgen) settings() {
+	b, f, s, u := (*pgen).boolean, (*pgen).f32, (*pgen).str, func(g *pgen) { g.uint(32) }
+	g.object([]pfield{
+		dflt("trackChanges", b), dflt("trackMoves", b), dflt("defaultTab", f), dflt("evenOddHeaders", b), dflt("mirrorMargins", b),
+		dflt("autoHyphenation", b), dflt("hyphenationZone", f), dflt("hyphenateCaps", b), dflt("consecutiveHyphenLimit", u),
+		opt("pageColor", (*pgen).rgb), opt("pagePicture", func(g *pgen) {
+			g.object([]pfield{dflt("media", s), dflt("fill_type", s), dflt("title", s)})
+		}),
+		opt("watermark", func(g *pgen) {
+			g.object([]pfield{dflt("text", s), dflt("font", s), dflt("color", (*pgen).rgb), dflt("diagonal", b), dflt("semitransparent", b)})
+		}),
+		dflt("majorFont", s), dflt("minorFont", s), dflt("themeColors", func(g *pgen) { g.list((*pgen).rgb) }), dflt("themeName", s),
+		dflt("footnoteFormat", g.enumOf(numFormatNames)), dflt("endnoteFormat", g.enumOf(numFormatNames)), dflt("footnotePr", (*pgen).noteProps),
+		dflt("endnotePr", (*pgen).noteProps), opt("protection", s), dflt("protectFormatting", b), dflt("protectHash", func(g *pgen) {
+			g.list(func(g *pgen) {
+				if g.oops(10) {
+					g.w(g.pick(`["a"]`, `["a","b","c"]`, `{"0":"a"}`))
+					return
+				}
+				g.w("[")
+				g.str()
+				g.w(",")
+				g.str()
+				g.w("]")
+			})
+		}),
+		dflt("compatMode", u), dflt("romanFonts", func(g *pgen) { g.list((*pgen).str) }), dflt("sumParagraphSpacing", b),
+		dflt("allowSpaceOfSameStyleInTable", b), dflt("gridH", f), dflt("gridV", f), opt("math", func(g *pgen) {
+			g.object([]pfield{dflt("brkBin", g.enumOf(brkBinNames)), dflt("brkBinSub", g.enumOf(brkBinSubNames)), dflt("wrapIndent", f),
+				dflt("wrapRight", b)})
+		}),
+		opt("bibStyle", s), opt("attachedTemplate", s), dflt("linkStyles", b), opt("zoom", func(g *pgen) {
+			g.object([]pfield{req("percent", u), opt("fit", g.enumOf(zoomFitNames))})
+		}),
+		dflt("removePersonalInfo", b), dflt("removeDateTime", b),
+	})
+}
+
+func (g *pgen) textBody() {
+	u := func(g *pgen) { g.uint(32) }
+	g.object([]pfield{dflt("vert", g.enumOf(textVertNames)), dflt("anchor", g.enumOf(vAlignNames)), opt("next", u),
+		opt("inset", func(g *pgen) { g.four(u) }), dflt("autoFit", (*pgen).boolean), opt("autoColor", (*pgen).rgb)})
+}
+
+func (g *pgen) part() {
+	g.object([]pfield{req("kind", g.enumOf(partKindNames)), req("blocks", func(g *pgen) { g.list((*pgen).block) }), dflt("body", (*pgen).textBody)})
+}
+
+func (g *pgen) comment() {
+	s := (*pgen).str
+	g.object([]pfield{dflt("author", s), dflt("initials", s), dflt("date", s), opt("parent", func(g *pgen) { g.uint(32) }),
+		dflt("resolved", (*pgen).boolean), dflt("part", func(g *pgen) { g.uint(32) }), opt("durableId", s), opt("dateUtc", s)})
+}
+
+func (g *pgen) revision() {
+	s := (*pgen).str
+	g.object([]pfield{dflt("kind", g.enumOf(revisionKindNames)), dflt("author", s), dflt("date", s), opt("move_name", s)})
+}
+
+func (g *pgen) buildingBlock() {
+	s := (*pgen).str
+	strs := func(g *pgen) { g.list(s) }
+	g.object([]pfield{dflt("name", s), dflt("gallery", s), dflt("category", s), dflt("description", s), dflt("guid", s), dflt("style", s),
+		dflt("types", strs), dflt("behaviors", strs), dflt("blocks", func(g *pgen) { g.list((*pgen).block) })})
+}
+
+func (g *pgen) source() {
+	var fields []pfield
+	for _, n := range []string{"tag", "kind", "author", "title", "year", "publisher", "city", "journal", "volume", "pages", "url", "editor",
+		"edition", "issue", "month", "day", "accessed", "doi"} {
+		fields = append(fields, dflt(n, (*pgen).str))
+	}
+	g.object(fields)
+}
+
+func (g *pgen) customProp() {
+	s := (*pgen).str
+	g.object([]pfield{dflt("name", s), dflt("kind", s), dflt("value", s)})
+}
+
+func (g *pgen) idMap(val func(*pgen)) {
+	g.w("{")
+	for i := range g.rng.IntN(3) {
+		if i > 0 {
+			g.w(",")
+		}
+		k := g.pick(`"1"`, `"2"`, `"0"`, `"4294967295"`)
+		if g.oops(10) {
+			k = g.pick(`"-1"`, `"x"`, `"01"`, `"4294967296"`)
+		}
+		g.w(k + ":")
+		val(g)
+	}
+	g.w("}")
+}
+
 func (g *pgen) document() {
 	g.w(`{"body":`)
 	g.list((*pgen).block)
@@ -722,11 +922,23 @@ func (g *pgen) document() {
 	if g.chance(3) {
 		g.w(`,"media":{"a.png":[1,2,255],"b":[]}`)
 	}
+	for _, part := range []struct {
+		name string
+		gen  func(*pgen)
+	}{{"lastSection", (*pgen).sectionProps}, {"settings", (*pgen).settings}, {"parts", func(g *pgen) { g.idMap((*pgen).part) }},
+		{"comments", func(g *pgen) { g.idMap((*pgen).comment) }}, {"revisions", func(g *pgen) { g.list((*pgen).revision) }},
+		{"sources", func(g *pgen) { g.list((*pgen).source) }}, {"customProps", func(g *pgen) { g.list((*pgen).customProp) }},
+		{"glossary", func(g *pgen) { g.list((*pgen).buildingBlock) }}} {
+		if g.chance(3) {
+			g.w(`,"` + part.name + `":`)
+			part.gen(g)
+		}
+	}
 	g.w("}")
 }
 
 func (g *pgen) input() []byte {
-	ops := "cccppptreexkbbbbddOMULFWEQB"
+	ops := "cccppptreexkbbbbddOMULFWEQBssgPCRKSXTNNmmAGI"
 	op := ops[g.rng.IntN(len(ops))]
 	g.b.WriteByte(op)
 	pair := func(f func(*pgen)) {
@@ -763,6 +975,54 @@ func (g *pgen) input() []byte {
 		pair((*pgen).paraProps)
 	case 'B':
 		pair((*pgen).borders)
+	case 's':
+		g.sectionProps()
+	case 'g':
+		g.settings()
+	case 'P':
+		g.part()
+	case 'C':
+		g.comment()
+	case 'R':
+		g.revision()
+	case 'K':
+		g.buildingBlock()
+	case 'S':
+		g.source()
+	case 'X':
+		g.customProp()
+	case 'T', 'I':
+		g.textBody()
+	case 'N':
+		g.w("[")
+		g.enum(numFormatNames)
+		g.w(",")
+		switch g.rng.IntN(4) {
+		case 0:
+			g.w(strconv.Itoa(g.rng.IntN(130)))
+		case 1:
+			g.w(g.pick("0", "99", "100", "101", "110", "1000", "1010", "9999", "10000", "10001", "100100", "1000000", "100000000", "100000001",
+				"4294967295", "780", "781", "870", "871", "50000", "50001", "999999", "1000000"))
+		default:
+			g.uint(32)
+		}
+		g.w("]")
+	case 'm', 'A':
+		g.w("[")
+		g.sectionProps()
+		g.w(",")
+		if op == 'm' {
+			g.f32()
+		} else {
+			g.sectionProps()
+		}
+		g.w("]")
+	case 'G':
+		g.w("[")
+		g.f32()
+		g.w(",")
+		g.f32()
+		g.w("]")
 	}
 	out := []byte(g.b.String())
 	if g.oops(15) && len(out) > 2 {
@@ -828,6 +1088,16 @@ func propEdgeInputs(untyped string) [][]byte {
 	for _, js := range []string{`"x":1`, `"body":[]`, `"body":[{"kind":"para","text":"","runs":[]}],"media":{}`, `"footnoteSeparators":{}`,
 		`"footnoteSeparators":{"separator":[]}`, `"core":{"revision":4294967295}`, `"body":null`, `"core":[]`, `"core":["t"]`} {
 		add('d', "{"+js+untyped+"}")
+	}
+	// Every number format over the first numbers and the edges of each system.
+	for _, f := range numFormatNames {
+		for n := range 131 {
+			add('N', `["`+f+`",`+strconv.Itoa(n)+`]`)
+		}
+		for _, n := range []string{"780", "781", "870", "871", "1000", "1010", "9999", "10000", "10001", "100100", "1000000", "100000000",
+			"100000001", "999999", "1000000", "50000", "50001", "4294967295"} {
+			add('N', `["`+f+`",`+n+`]`)
+		}
 	}
 	add('O', `[{"textEffects":{"glow":{}}},{"textEffects":{"shadow":{}}}]`)
 	add('O', `[{},{"textEffects":{}}]`)

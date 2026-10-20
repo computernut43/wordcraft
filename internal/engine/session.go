@@ -132,21 +132,10 @@ func (s *Session) clampSelection() {
 }
 
 // protected reports Restrict Editing on the document, which isn't ported yet.
-func (s *Session) protected() bool {
-	var settings struct {
-		Protection *string `json:"protection"`
-	}
-	return s.Doc.Settings.Get(&settings) && settings.Protection != nil
-}
+func (s *Session) protected() bool { return s.Doc.Settings.Protection != nil }
 
 // trackChanges reports Track Changes on.
-func (s *Session) trackChanges() bool {
-	var settings struct {
-		TrackChanges bool `json:"trackChanges"`
-	}
-	s.Doc.Settings.Get(&settings)
-	return settings.TrackChanges
-}
+func (s *Session) trackChanges() bool { return s.Doc.Settings.TrackChanges }
 
 type snapshot struct {
 	doc        *doc.Document
