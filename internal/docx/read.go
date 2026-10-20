@@ -7,10 +7,11 @@ package docx
 // tabs, note references, tables), sections with their headers and footers, styles, numbering,
 // settings, the theme's colours and fonts, footnotes and endnotes with their separators,
 // comments, core and extended properties, and the parts kept verbatim (the font table and
-// whatever the model doesn't hold). What isn't ported yet (drawings, pictures, VML, OLE objects,
-// equations, content controls, run text effects, the math settings, custom properties,
-// bibliography sources, custom XML, glossaries, macro projects, encrypted packages) makes Read
-// refuse the file with an ErrNotPorted error rather than drop it.
+// whatever the model doesn't hold), content controls, and drawings (pictures, shapes, text boxes,
+// groups, canvases, freeforms, legacy VML). What isn't ported yet (charts, diagrams, ink, OLE
+// objects, equations, run text effects, the math settings, custom properties, bibliography
+// sources, custom XML, glossaries, macro projects, encrypted packages) makes Read refuse the file
+// with an ErrNotPorted error rather than drop it.
 
 import (
 	"bytes"

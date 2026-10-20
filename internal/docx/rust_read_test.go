@@ -249,7 +249,7 @@ func goRead(b []byte) string {
 
 const (
 	nsW     = `xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"`
-	nsDocs  = nsW + ` xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"`
+	nsDocs  = nsW + ` xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:w10="urn:schemas-microsoft-com:office:word"`
 	relBase = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
 )
 
@@ -678,8 +678,8 @@ func (g *docxGen) run() {
 		case 23:
 			g.drawing()
 		case 24:
-			if g.chance(g.exotic) {
-				g.b.WriteString(`<w:pict><v:rect style="width:10pt"/></w:pict>`)
+			if g.chance(3) {
+				g.pict()
 			}
 		default:
 			g.text("w:t")
@@ -1404,6 +1404,263 @@ func (g *docxGen) custGeom() {
 	g.b.WriteString(`</a:pathLst></a:custGeom>`)
 }
 
+// pict writes a w:pict of legacy VML: shapetypes, shapes, presets, lines, groups, pictures, text
+// boxes, WordArt, watermarks and paths, with hostile styles, colours and sizes.
+func (g *docxGen) pict() {
+	g.b.WriteString(`<w:pict>`)
+	if g.chance(80) {
+		// More drawings than one picture keeps.
+		g.b.WriteString(strings.Repeat(`<v:rect style="width:1pt;height:1pt" fillcolor="red"/>`, 1003) + `</w:pict>`)
+		return
+	}
+	for range 1 + g.rng.IntN(3) {
+		g.vmlEl(0)
+	}
+	g.b.WriteString(`</w:pict>`)
+}
+
+var (
+	vmlColorPool = []string{"#ffc000 [3207]", "ffc000", "#f00", "f00", "black", "Red", "rgb(255, 128, 0)", "rgb(100%, 0%, 0%)", "rgba(1,2,3,0.5)",
+		"rgb(1,2)", "rgb(x,1,2)", "#é", "", "none", "window", "#12345", "rgb(300,-5,nan)", "rgb(50.5%, 1e2%, 0))", "rgb(2.5,0.5,1.5)", " #4472C4 "}
+	vmlLenPool = []string{"100pt", "72", "1in", "2cm", "-5pt", "0", "x", "99999pt", "5.5pt", "1e3pt", "", "50%", "3mm"}
+)
+
+// vmlStyleAttr writes a random VML style attribute.
+func (g *docxGen) vmlStyleAttr(sized bool) {
+	if g.chance(6) && !sized {
+		return
+	}
+	var decls []string
+	if g.chance(2) {
+		decls = append(decls, "position:absolute")
+	}
+	for range g.rng.IntN(9) {
+		switch g.rng.IntN(16) {
+		case 0:
+			decls = append(decls, g.pick("position:absolute", "POSITION: Absolute", "position:relative", "position:"))
+		case 1, 2:
+			decls = append(decls, g.pick("left", "margin-left", "top", "margin-top")+":"+g.pick(vmlLenPool...))
+		case 3, 4:
+			decls = append(decls, g.pick("width", "height", "Width")+":"+g.pick(vmlLenPool...))
+		case 5:
+			decls = append(decls, "z-index:"+g.pick("-251658240", "5", "x", "-1", "0"))
+		case 6:
+			decls = append(decls, "visibility:"+g.pick("hidden", "visible", "HIDDEN"))
+		case 7:
+			decls = append(decls, "rotation:"+g.pick("90", "45.5", "-30", "5898240fd", "x", "inf", "NaN", "1e40", "720", " 2949120 fd"))
+		case 8:
+			decls = append(decls, "flip:"+g.pick("x", "y", "x y", "xy", ""))
+		case 9:
+			decls = append(decls, "mso-position-horizontal:"+g.pick("center", "left", "right", "inside", "outside", "absolute", "Center"))
+		case 10:
+			decls = append(decls, "mso-position-vertical:"+g.pick("center", "top", "bottom", "inside", "outside", "x"))
+		case 11:
+			decls = append(decls, "mso-position-horizontal-relative:"+g.pick("page", "margin", "char", "left-margin-area", "right-margin-area", "inner-margin-area", "outer-margin-area", "text", "Page"))
+		case 12:
+			decls = append(decls, "mso-position-vertical-relative:"+g.pick("page", "margin", "line", "top-margin-area", "bottom-margin-area", "inner-margin-area", "outer-margin-area", "text"))
+		case 13:
+			decls = append(decls, "mso-wrap-distance-"+g.pick("left", "right", "top", "bottom")+":"+g.pick("9pt", "0", "-3pt", "9999pt", "x"))
+		case 14:
+			decls = append(decls, "v-text-anchor:"+g.pick("middle", "bottom", "top", "middle-center", "x"))
+		default:
+			decls = append(decls, g.pick("junk", "a:b:c", " ", "mso-fit-shape-to-text:t"))
+		}
+	}
+	if sized {
+		// The last declaration wins: a size the drawing's points scale to.
+		decls = append(decls, "width:"+g.pick("100pt", "7.5pt", "3pt")+";height:"+g.pick("80pt", "2pt"))
+	}
+	g.b.WriteString(` style="` + xmlEsc(strings.Join(decls, g.pick(";", "; ", ";;"))) + `"`)
+}
+
+// vmlPaint writes the VML stroke and fill attributes, each sometimes missing.
+func (g *docxGen) vmlPaint() {
+	for _, a := range []struct {
+		n    string
+		pool []string
+	}{
+		{"stroked", []string{"f", "false", "0", "t", "true", "", "F"}}, {"filled", []string{"f", "t", "0", "on"}},
+		{"strokecolor", vmlColorPool}, {"fillcolor", vmlColorPool}, {"strokeweight", []string{"1pt", "2", "x", "-5pt", "500pt", ".5mm", "1.5pt"}},
+	} {
+		if g.chance(2) {
+			g.b.WriteString(` ` + a.n + `="` + xmlEsc(g.pick(a.pool...)) + `"`)
+		}
+	}
+}
+
+// vmlEl writes one VML element of a picture or group.
+func (g *docxGen) vmlEl(depth int) {
+	if g.chance(6) {
+		// Word's text watermark (in a header), with its parts sometimes missing or odd.
+		g.b.WriteString(`<v:shape id="` + g.pick("PowerPlusWaterMarkObject357", "WaterMark", "x") + `" o:spid="_x0000_s2049" type="#_x0000_t136" style="` +
+			g.pick("position:absolute;margin-left:0;margin-top:0;width:412.4pt;height:247.4pt;rotation:315;z-index:-251657216;mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical:center;mso-position-vertical-relative:margin",
+				"position:absolute;width:100pt;height:50pt;mso-position-horizontal:center;mso-position-vertical:center", "position:absolute;rotation:0", "",
+				"position:absolute;mso-position-horizontal:center", "position:absolute;mso-position-vertical:center") +
+			`" o:allowincell="f" fillcolor="` + g.pick(vmlColorPool...) + `" stroked="f">`)
+		if g.chance(2) {
+			g.b.WriteString(`<v:fill opacity="` + g.pick(".5", "1", "32768f", "x") + `"/>`)
+		}
+		g.b.WriteString(`<v:textpath style="font-family:&quot;` + g.pick("Calibri", "Times New Roman", "", " ") + `&quot;;font-size:1pt" string="` + g.pick("DRAFT", "ASAP", " ", "Confidential") + `"`)
+		if g.chance(4) {
+			g.b.WriteString(` on="` + g.pick("f", "t") + `"`)
+		}
+		g.b.WriteString(`/><w10:wrap anchorx="margin" anchory="margin"/></v:shape>`)
+		return
+	}
+	switch g.rng.IntN(12) {
+	case 0:
+		g.b.WriteString(`<v:shapetype id="` + g.pick("_x0000_t202", "_x0000_t136", "_x0000_t75", "myType", "_x0000_t32") + `"`)
+		if g.chance(2) {
+			g.b.WriteString(` o:spt="` + g.pick("202", "136", "150", "175", "13", "0", "x", "32") + `"`)
+		}
+		g.vmlPaint()
+		if g.chance(3) {
+			g.b.WriteString(` path="m,l,21600r21600,l21600,xe"`)
+		}
+		g.b.WriteString(`/>`)
+	case 1:
+		if depth < 10 {
+			g.b.WriteString(`<v:group`)
+			g.vmlStyleAttr(true)
+			if g.chance(2) {
+				g.b.WriteString(` coordsize="` + g.pick("1000,1000", "100,50", "0,0", "-5,10", "x", "21600", "1,", "21600,21600") + `"`)
+			}
+			if g.chance(3) {
+				g.b.WriteString(` coordorigin="` + g.pick("0,0", "-50,10", "x", "100,100") + `"`)
+			}
+			g.b.WriteString(`>`)
+			for range g.rng.IntN(4) {
+				g.vmlEl(depth + 1)
+			}
+			if depth == 0 && g.chance(15) {
+				// Nested deeper than a group is read.
+				for range 10 {
+					g.b.WriteString(`<v:group style="width:10pt;height:10pt" coordsize="10,10"><v:rect style="width:5pt;height:5pt"/>`)
+				}
+				for range 10 {
+					g.b.WriteString(`</v:group>`)
+				}
+			}
+			g.b.WriteString(`</v:group>`)
+		}
+	case 2:
+		g.b.WriteString(`<v:line`)
+		g.vmlStyleAttr(false)
+		g.vmlPaint()
+		for _, a := range []string{"from", "to"} {
+			if g.chance(4) == false {
+				g.b.WriteString(` ` + a + `="` + g.pick("0,0", "100pt,50pt", "10,-20", "x,5", "5", "-3pt,99999pt", "1in,2cm") + `"`)
+			}
+		}
+		g.b.WriteString(`>`)
+		if g.chance(2) {
+			g.b.WriteString(`<v:stroke startarrow="` + g.pick("block", "none", "") + `" endarrow="` + g.pick("classic", "none") + `"/>`)
+		}
+		g.vmlWrap()
+		g.b.WriteString(`</v:line>`)
+	default:
+		name := g.pick("v:shape", "v:shape", "v:shape", "v:rect", "v:roundrect", "v:oval", "v:image", "v:junk")
+		g.b.WriteString(`<` + name)
+		if g.chance(4) {
+			g.b.WriteString(` id="` + g.pick("PowerPlusWaterMarkObject357", "_x0000_s1026", "WordPictureWatermark1") + `"`)
+		}
+		path := g.chance(3)
+		g.vmlStyleAttr(path && !g.chance(4))
+		g.vmlPaint()
+		if g.chance(2) {
+			g.b.WriteString(` type="` + g.pick("#_x0000_t202", "_x0000_t136", "#_x0000_t75", "#myType", " ##_x0000_t32 ", "#_x0000_t150", "#_x0000_t13", "#_x0000_tx") + `"`)
+		}
+		if g.chance(4) {
+			g.b.WriteString(` o:spt="` + g.pick("202", "136", "150", "175", "176", "13", "0", "24", "999", "x", "+5", "84") + `"`)
+		}
+		if g.chance(5) {
+			g.b.WriteString(` alt="` + g.pick("A chart", "") + `"`)
+		}
+		if path {
+			g.b.WriteString(` path="` + xmlEsc(g.pick("m0,0l100,0,100,100xe", "m,l100,xe nf", "m0,0 c 10,10 20,20 30,30 e", "M 10 10 L 20 20 R 5,5 T 3,3 E",
+				"m0,0at0,0,100,100,0,0,100,100x", "qx 5,5 qy 10,10 qb 1,1,2,2", "m0,0l@1,@2e", "m 99999999999999999,0 l 1 1 e", "ns m0,0l5,5e",
+				"m-5.5,3.7l+2,.5e", "", "zz", "v1,2,3,4,5,6 e", "wa0,0,10,10,1,1,5,5 wr 0,0,1,1,2,2,3,3 ae 1,2,3,4,5,6 al 1,1,1,1,1,1", "m0,0,5,5,10,0x m20,20l30,30",
+				"t5,5r1,1,2,2v1,1,2,2,3,3,4,4,5,5x", "m10,10v1,2,3,4,5,6e", "m0,0qb1,1,2,2,30,40e", "ns m0,0l5,5e", "nsnf m0,0l5,5e",
+				"m 999999999999,0 r 999999999999,5 e", "m10,10l20,20x r5,5e", "m0,0l5,", "m0,0 l 99999999999999999,7 e")) + `"`)
+
+			if g.chance(2) {
+				g.b.WriteString(` coordsize="` + g.pick("1000,1000", "100,50", "0,0", "-5,10", "x", "21600", "21600,21600", "999999999999999,1000") + `"`)
+			}
+			if g.chance(3) {
+				g.b.WriteString(` coordorigin="` + g.pick("0,0", "-50,10", "x", "10") + `"`)
+			}
+		}
+		g.b.WriteString(`>`)
+		if g.chance(6) {
+			g.b.WriteString(`<v:path v="m,l1,1e"/>`)
+		}
+		if g.chance(4) {
+			g.b.WriteString(`<v:fill opacity="` + g.pick("0", ".5", "32768f", "50%", "0f", "x", "inf", "2", "-1", "1") + `"/>`)
+		}
+		if g.chance(4) {
+			g.b.WriteString(`<v:stroke opacity="` + g.pick("0.5", "65536f", "x", "10%", "2", "-1", "131072f") + `" startarrow="block"/>`)
+		}
+		switch g.rng.IntN(5) {
+		case 0:
+			id := "rIdMissing"
+			if len(g.images) > 0 && !g.chance(6) {
+				id = g.pick(g.images...)
+			}
+			g.b.WriteString(`<v:imagedata ` + g.pick("r:id", "r:pict", "r:x") + `="` + id + `"`)
+			if g.chance(2) {
+				g.b.WriteString(` o:title="` + g.pick("Logo", "") + `"`)
+			}
+			g.b.WriteString(`/>`)
+		case 1:
+			g.b.WriteString(`<v:textpath`)
+			if g.chance(2) {
+				g.b.WriteString(` style="font-family:` + xmlEsc(g.pick(`&quot;Calibri&quot;`, `'Times New Roman'`, ` `, `""`, "Arial;font-size:1pt", strings.Repeat("f", 120))) + `"`)
+			}
+			if g.chance(3) {
+				g.b.WriteString(` on="` + g.pick("t", "f", "false", "0", "true") + `"`)
+			}
+			if !g.chance(8) {
+				g.b.WriteString(` string="` + xmlEsc(g.pick("DRAFT", "CONFIDENTIAL", " ", "", strings.Repeat("W", 250), "A\nB")) + `"`)
+			}
+			g.b.WriteString(`/>`)
+		case 2:
+			g.b.WriteString(`<v:textbox`)
+			if g.chance(2) {
+				g.b.WriteString(` inset="` + g.pick("0,0,0,0", "7.2pt,3.6pt,7.2pt,3.6pt", "91440,45720", ",,5pt", "x,-5pt,1in,", "99999pt", "") + `"`)
+			}
+			if g.chance(4) {
+				g.b.WriteString(` o:insetmode="` + g.pick("auto", "custom", "AUTO") + `"`)
+			}
+			if g.chance(3) {
+				g.b.WriteString(` style="mso-fit-shape-to-text:` + g.pick("t", "true", "f", "T") + `"`)
+			}
+			g.b.WriteString(`>`)
+			if g.chance(8) {
+				// Text that isn't in a v:textbox of its own.
+				g.b.WriteString(`<v:junk><w:txbxContent><w:p><w:r><w:t>J</w:t></w:r></w:p></w:txbxContent></v:junk>`)
+			}
+			if !g.chance(6) {
+				g.b.WriteString(`<w:txbxContent>`)
+				if g.txbxDepth < 5 {
+					g.txbxDepth++
+					g.blocks(2, 1+g.rng.IntN(2))
+					g.txbxDepth--
+				}
+				g.b.WriteString(`</w:txbxContent>`)
+			}
+			g.b.WriteString(`</v:textbox>`)
+		}
+		g.vmlWrap()
+		g.b.WriteString(`</` + name + `>`)
+	}
+}
+
+func (g *docxGen) vmlWrap() {
+	if g.chance(3) {
+		g.b.WriteString(`<w10:wrap type="` + g.pick("square", "tight", "through", "topAndBottom", "none", "x") + `"/>`)
+	}
+}
+
 // colorEl writes a DrawingML colour element with random modifiers.
 func (g *docxGen) colorEl() {
 	name := g.pick("a:srgbClr", "a:schemeClr", "a:sysClr", "a:prstClr", "a:hslClr", "a:srgbClr", "a:scrgbClr")
@@ -2124,6 +2381,12 @@ func (g *docxGen) hf(footer bool) string {
 	g.part(80)
 	g.b.WriteString(`<` + tag + ` ` + nsDocs + `>`)
 	g.blocks(1, 1+g.rng.IntN(3))
+	if g.chance(3) {
+		// A picture in the header: often Word's watermark.
+		g.b.WriteString(`<w:p><w:r>`)
+		g.pict()
+		g.b.WriteString(`</w:r></w:p>`)
+	}
 	if g.chance(5) {
 		g.b.WriteString(`<w:p><w:pPr>`)
 		g.sectPr()

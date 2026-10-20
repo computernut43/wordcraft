@@ -1,10 +1,10 @@
 package docx
 
-// Freeform shapes (DrawingML custom geometry, a:custGeom) and the ink strokes WordCraft draws with
-// them (Rust crates/docx/src/read/freeform.rs cust_geom, ink_tool, ink_order, line_alpha,
-// bezier). Legacy VML paths (vml_path) aren't ported yet.
+// Freeform shapes (DrawingML custom geometry, a:custGeom; legacy VML paths) and the ink strokes
+// WordCraft draws with them (Rust crates/docx/src/read/freeform.rs).
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/computernut43/craft-libs/rustcompat"
@@ -220,4 +220,286 @@ func bezier(c [][2]float64, t float64) [2]float64 {
 		return [2]float64{}
 	}
 	return p[0]
+}
+
+const (
+	// maxVML is the largest VML path coordinate kept (coordinate-space units).
+	maxVML = 1.0e12
+	// maxVMLPath is the characters of a VML path attribute read; the rest is ignored.
+	maxVMLPath = 1 << 20
+	// maxVMLParams is the parameters of a VML path kept, all commands together.
+	maxVMLParams = doc.MaxFreeformPoints * 8
+)
+
+// vmlPathShape is a legacy VML freeform (v:shape with a path, ECMA-376 Part 4 §14.1.2.19).
+type vmlPathShape struct {
+	freeform doc.Freeform
+	// noFill and noStroke are nf and ns in the path.
+	noFill, noStroke bool
+}
+
+// vmlTwo are the VML path commands that are two letters long.
+var vmlTwo = []string{"nf", "ns", "ae", "al", "at", "ar", "wa", "wr", "qx", "qy", "qb"}
+
+// vmlPath is the VML path of a shape, mapped onto its w × h frame (points) through its coordsize
+// (default 1000,1000) and coordorigin (default 0,0). Commands: m/t move (absolute / relative),
+// l/r line, c/v cubic Bézier (flattened), x close, e end, nf/ns no fill / no outline; arcs (at,
+// ar, wa, wr) and quadrants (qx, qy) are drawn straight to their end, qb straight to its last
+// point, and ellipses (ae, al) are skipped. An empty parameter is 0. False when the path has no
+// points, or uses formulas (@n, from v:formulas, which aren't evaluated): such a shape isn't drawn
+// rather than drawn wrong.
+func vmlPath(path string, coordsize, coordorigin *string, w, h float32) (vmlPathShape, bool) {
+	if strings.Contains(path, "@") {
+		return vmlPathShape{}, false
+	}
+	pair := func(v *string) (float64, float64, bool) {
+		if v == nil {
+			return 0, 0, false
+		}
+		a, b, _ := strings.Cut(*v, ",")
+		n := func(s string) (float64, bool) {
+			i, ok := intOf(s)
+			return rustcompat.Clamp(float64(i), -maxVML, maxVML), ok
+		}
+		x, ok := n(a)
+		if !ok {
+			return 0, 0, false
+		}
+		y, ok := n(b)
+		if !ok {
+			y = 0
+		}
+		return x, y, true
+	}
+	size := func(v float64) float64 {
+		if v > 0 {
+			return v
+		}
+		return 1000
+	}
+	cw, ch := 1000.0, 1000.0
+	if a, b, ok := pair(coordsize); ok {
+		cw, ch = size(a), size(b)
+	}
+	ox, oy, _ := pair(coordorigin)
+	sx, sy := float64(w)/cw, float64(h)/ch
+	scale := func(p [2]float64) [2]doc.F32 {
+		return [2]doc.F32{doc.F32(float32((p[0] - ox) * sx)), doc.F32(float32((p[1] - oy) * sy))}
+	}
+	var d vmlDraw
+	noFill, noStroke := false, false
+	for _, c := range vmlCommands(path) {
+		if d.full() {
+			break
+		}
+		cmd, params := c.cmd, c.params
+		pts := make([][2]float64, 0, len(params)/2)
+		for i := 0; i+1 < len(params); i += 2 {
+			pts = append(pts, [2]float64{params[i], params[i+1]})
+		}
+		switch cmd {
+		case "m", "t":
+			for i, p := range pts {
+				if cmd == "t" {
+					p = d.rel(p)
+				}
+				if i == 0 {
+					d.moveTo(p)
+				} else {
+					d.lineTo(p)
+				}
+			}
+		case "l", "r", "qx", "qy":
+			for _, p := range pts {
+				if cmd == "r" {
+					p = d.rel(p)
+				}
+				d.lineTo(p)
+			}
+		case "c", "v":
+			for i := 0; i+2 < len(pts); i += 3 {
+				ctrl := [][2]float64{d.at}
+				for _, p := range pts[i : i+3] {
+					if cmd == "v" {
+						p = d.rel(p)
+					}
+					ctrl = append(ctrl, p)
+				}
+				for k := 1; k <= curveSteps; k++ {
+					d.lineTo(bezier(ctrl, float64(k)/curveSteps))
+				}
+			}
+		case "qb":
+			if len(pts) > 0 {
+				d.lineTo(pts[len(pts)-1])
+			}
+		// Bounding box, then start and end: at/wa draw a line to the start, ar/wr move there.
+		case "at", "ar", "wa", "wr":
+			for i := 0; i+3 < len(pts); i += 4 {
+				st, en := pts[i+2], pts[i+3]
+				if cmd == "ar" || cmd == "wr" {
+					d.moveTo(st)
+				} else {
+					d.lineTo(st)
+				}
+				d.lineTo(en)
+			}
+		case "x":
+			d.end(true)
+		case "e":
+			d.end(false)
+		case "nf":
+			noFill = true
+		case "ns":
+			noStroke = true
+		}
+	}
+	d.end(false)
+	paths := doc.Vec[doc.FreePath]{}
+	for _, sub := range d.done {
+		pts := doc.Vec[[2]doc.F32]{}
+		for _, p := range sub.pts {
+			pts = append(pts, scale(p))
+		}
+		paths = append(paths, doc.FreePath{Pts: pts, Closed: sub.closed})
+	}
+	f := doc.Freeform{W: doc.F32(w), H: doc.F32(h), Paths: paths, Alpha: 1}.Sanitized()
+	return vmlPathShape{freeform: f, noFill: noFill, noStroke: noStroke}, len(f.Paths) > 0
+}
+
+// vmlDraw is the pen while a VML path is drawn: where it is, where the subpath began, the subpath
+// being drawn and those done (closed or not).
+type vmlDraw struct {
+	at, start [2]float64
+	cur       [][2]float64
+	done      []vmlSub
+}
+
+type vmlSub struct {
+	pts    [][2]float64
+	closed bool
+}
+
+func (d *vmlDraw) full() bool { return len(d.done) >= doc.MaxFreeformPaths }
+
+func (d *vmlDraw) rel(p [2]float64) [2]float64 {
+	return [2]float64{rustcompat.Clamp(d.at[0]+p[0], -maxVML, maxVML), rustcompat.Clamp(d.at[1]+p[1], -maxVML, maxVML)}
+}
+
+func (d *vmlDraw) moveTo(p [2]float64) {
+	d.end(false)
+	d.at, d.start = p, p
+	d.cur = append(d.cur, p)
+}
+
+func (d *vmlDraw) lineTo(p [2]float64) {
+	if len(d.cur) == 0 {
+		d.cur = append(d.cur, d.at)
+		d.start = d.at
+	}
+	if len(d.cur) < doc.MaxFreeformPoints {
+		d.cur = append(d.cur, p)
+	}
+	d.at = p
+}
+
+// end finishes the subpath being drawn, closed back to its start or not.
+func (d *vmlDraw) end(closed bool) {
+	if len(d.cur) > 0 && !d.full() {
+		d.done = append(d.done, vmlSub{d.cur, closed})
+	}
+	d.cur = nil
+	if closed {
+		d.at = d.start
+	}
+}
+
+type vmlCommand struct {
+	cmd    string
+	params []float64
+}
+
+// vmlCommands is the commands of a VML path with their parameters: a command is a letter (or one
+// of vmlTwo) followed by numbers separated by commas or spaces. An empty parameter (nothing before
+// a comma) is 0, and so is a formula reference (@n, not expected here: see vmlPath); fractions
+// are dropped. Anything else is skipped.
+func vmlCommands(path string) []vmlCommand {
+	var out []vmlCommand
+	chars := []rune(takeChars(path, maxVMLPath))
+	// Whether a number was read since the command or the last comma.
+	hasNum := true
+	kept := 0
+	push := func(v float64) {
+		if kept < maxVMLParams && len(out) > 0 {
+			last := &out[len(out)-1]
+			last.params = append(last.params, v)
+			kept++
+		}
+	}
+	isDigit := func(c rune) bool { return '0' <= c && c <= '9' }
+	isAlpha := func(c rune) bool { return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' }
+	lower := func(c rune) rune {
+		if 'A' <= c && c <= 'Z' {
+			return c + ('a' - 'A')
+		}
+		return c
+	}
+	for i := 0; i < len(chars); i++ {
+		c := chars[i]
+		switch {
+		case isAlpha(c):
+			if !hasNum {
+				push(0)
+			}
+			hasNum = false
+			cmd := string(lower(c))
+			if i+1 < len(chars) {
+				two := cmd + string(lower(chars[i+1]))
+				if slices.Contains(vmlTwo, two) {
+					i++
+					cmd = two
+				}
+			}
+			out = append(out, vmlCommand{cmd: cmd})
+		case c == ',':
+			if !hasNum {
+				push(0)
+			}
+			hasNum = false
+		case c == '@' || c == '-' || c == '+' || c == '.' || isDigit(c):
+			v := 0.0
+			if isDigit(c) {
+				v = float64(c - '0')
+			}
+			frac := c == '.'
+			for i+1 < len(chars) {
+				n := chars[i+1]
+				if n == '.' {
+					frac = true
+				} else if isDigit(n) {
+					if !frac {
+						// Rounded on its own (float64(…)): Go may otherwise fuse the multiply
+						// and add, which Rust never does.
+						v = min(float64(v*10)+float64(n-'0'), maxVML)
+					}
+				} else {
+					break
+				}
+				i++
+			}
+			switch c {
+			case '@':
+				v = 0
+			case '-':
+				v = -v
+			}
+			hasNum = true
+			push(v)
+		}
+		// Whitespace and anything else only separate numbers.
+	}
+	if !hasNum {
+		push(0)
+	}
+	return out
 }
