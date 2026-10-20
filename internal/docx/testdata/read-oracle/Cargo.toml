@@ -4,13 +4,21 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
-# The Rust reference for internal/docx's reader: crates/docx itself (by path), with every
-# dependency at the version the baseline workspace locks (Cargo.lock started from the baseline's).
+# The Rust reference for internal/docx's reader: crates/docx itself (by path), with the
+# dependencies that decide what it reads and writes pinned to the versions the baseline
+# workspace locks (oracle lock files aren't kept).
 [dependencies]
 wordcraft-docx = { path = "../../../../crates/docx" }
 wordcraft-doc = { path = "../../../../crates/doc" }
 serde_json = "=1.0.151"
 serde = "=1.0.229"
+quick-xml = "=0.41.0"
+zip = { version = "=3.0.0", default-features = false, features = ["deflate"] }
+flate2 = "=1.1.10"
+zlib-rs = "=0.6.8"
+cfb = "=0.15.0"
+unicode-bidi = "=0.3.18"
+unicode-segmentation = "=1.13.3"
 
 [workspace]
 
