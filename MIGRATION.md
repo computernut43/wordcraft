@@ -96,7 +96,7 @@ Sizes are lines including in-file tests, at the baseline. The test count is the 
 | `fonts` | 5.7k | Font DB (bundled OFL and system fonts), metrics, outlines, HarfRust shaping, Word font substitution, OpenType MATH, WOFF/WOFF2 | `internal/fonts` | `go-text/typesetting` for parsing and shaping; port the substitution table; **write** a MATH table parser and a WOFF2 decoder | High |
 | `proof` | 13.6k | Spelling, grammar, hyphenation per language; Hunspell-style affix engine; Liang patterns | `internal/proof` | Straight port, pure logic plus data in `assets/` | Medium |
 | `layout` | 28.7k | Shaping, line breaking, tabs, lists, tables, pagination, headers/footers, notes, floats and wrap, math, vertical text, kinsoku, hit testing, incremental relayout | `internal/layout` | Port, using go-text `segmenter` (UAX #14/#29) and `bidi` (UAX #9) | **Very high** |
-| `docx` | 32.7k | OOXML read/write (Transitional and Strict), Flat OPC, Word 2003 XML, agile encryption, charts, SmartArt, glossary, content controls, passthrough | `internal/docx` | Port. Read with `encoding/xml` token streams; write with a hand-written XML writer (exact prefixes and order) | High (size, fidelity) |
+| `docx` | 32.7k | OOXML read/write (Transitional and Strict), Flat OPC, Word 2003 XML, agile encryption, charts, SmartArt, glossary, content controls, passthrough | `internal/docx` | Port. Read with our own bounded tokenizer that splits, resolves and fails exactly as the baseline's quick-xml 0.41 does (`encoding/xml` normalizes line ends in text and doesn't normalize attribute whitespace, so its trees differ from Rust's); write with a hand-written XML writer (exact prefixes and order) | High (size, fidelity) |
 | `docbin` | 7.7k | `.doc` reader: FIB, piece table, FKPs, SPRMs, stylesheet, lists, tables, notes, OfficeArt, XOR/RC4 decryption | `internal/docbin` | Port over `internal/cfb` | Medium |
 | `formats` | 19.7k | TXT, Markdown, HTML, RTF, ODT, LaTeX, MathML; spreadsheets for mail merge (`.xlsx`, `.ods`, `.xls`) | `internal/formats` | Port; `x/text/encoding` for code pages; port chardetng's detector (Apache-2.0/MIT, attributed) | Medium |
 | `metafile` | 3.2k | WMF/EMF → paths | `internal/metafile` | Straight port | Medium |
@@ -209,7 +209,7 @@ for `verified` rows.
 ### File formats (open = `OPEN_EXTS`, save = `SAVE_EXTS` in `crates/engine/src/io.rs`)
 | Format | Open | Save | Rust source | Status |
 |---|---|---|---|---|
-| DOCX/DOCM/DOTX/DOTM (Transitional + Strict) | ✓ | ✓ | `crates/docx` | not started |
+| DOCX/DOCM/DOTX/DOTM (Transitional + Strict) | ✓ | ✓ | `crates/docx` | in progress (M1c). XML tree (`crates/docx/src/xml.rs` with quick-xml 0.41) **verified**: all 6 Rust tests ported, and 400,000 generated inputs (well-formed, malformed, mutated, UTF-16, BOMs, DTDs, namespace edge cases) give the same tree or the same failure as the Rust code itself (`TestXMLMatchesRust`, 200,000 in CI; mutation-checked); fuzzed (10.5M execs). Error wording differs from quick-xml's. Kept as in Rust: `ToXML` writes names as read, so a hostile name can make re-emitted kept content invalid XML |
 | Encrypted DOCX (agile) | ✓ | ✓ | `crates/docx/src/crypt.rs` | not started |
 | Flat OPC XML, Word 2003 XML | ✓ | ✓ | `crates/docx/src/{flat,wordml2003*}.rs` | not started |
 | DOC/DOT (Word 97–2003), XOR/RC4 encrypted | ✓ | | `crates/docbin` | not started |
@@ -397,6 +397,7 @@ strongest. Layout, render and UI come later, after the model is proven.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | M1c.1: `internal/docx` XML tree, verified against `crates/docx/src/xml.rs` |
 | 2026-10-20 | minor | M1b: `internal/engine` core (session, undo, registry, seven commands, JSON open/save) and `cmd/wordcraft-cli`, verified against the Rust CLI by random scripts |
 | 2026-10-20 | minor | M1a: `internal/doc` model with lossless JSON and paragraph edits, verified against Rust |
 | 2026-10-20 | minor | M1: `internal/geom` ported and verified against Rust |

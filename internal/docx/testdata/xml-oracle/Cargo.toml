@@ -1,0 +1,13 @@
+[package]
+name = "xml-oracle"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# The Rust reference for internal/docx's XML tree: crates/docx/src/xml.rs itself (included by
+# path, not copied) with the quick-xml version the baseline locks.
+[dependencies]
+quick-xml = "=0.41.0"
+serde_json = "1"
+
+[workspace]
