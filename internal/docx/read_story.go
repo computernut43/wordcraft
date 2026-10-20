@@ -1,7 +1,7 @@
 package docx
 
 // Stories: blocks, paragraphs, runs, fields, tables (Rust crates/docx/src/read/story.rs).
-// Drawings, VML, OLE objects, ink and equations aren't ported yet: meeting one makes the read
+// OLE objects, ink and equations aren't ported yet: meeting one makes the read
 // refuse the file.
 
 import (
@@ -806,7 +806,9 @@ func (r *reader) readRunChild(sc *storyCtx, pb *paraBuilder, k *El, props doc.Ch
 			r.emitObj(sc, pb, o, props)
 		}
 	case "w:pict":
-		r.unported("VML pictures and shapes (w:pict)")
+		for _, o := range r.readVMLAll(sc, k, rels) {
+			r.emitObj(sc, pb, o, props)
+		}
 	case "w:object":
 		r.unported("embedded objects (w:object)")
 	case "w:contentPart":
