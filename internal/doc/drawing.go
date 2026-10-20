@@ -629,3 +629,49 @@ func (f *Freeform) SetDefaults() { *f = Freeform{Paths: Vec[FreePath]{}, Alpha: 
 
 // IsInk reports an ink stroke.
 func (f *Freeform) IsInk() bool { return f.Ink != nil }
+
+// Freeform limits (hostile files and commands).
+const (
+	// MaxFreeformPoints is the most points one path keeps: a long pen stroke has a few hundred.
+	MaxFreeformPoints = 5_000
+	// MaxFreeformPaths is the most paths one freeform keeps.
+	MaxFreeformPaths = 256
+	// maxFreeformCoord is the largest coordinate kept, in the path's own coordinate space.
+	maxFreeformCoord float32 = 1.0e6
+)
+
+// Sanitized is the same geometry with non-finite points dropped, coordinates clamped, the counts
+// capped and the opacity in 0–1: safe to draw whatever file or command it came from.
+func (f Freeform) Sanitized() Freeform {
+	isFinite := func(v float32) bool { return !math.IsNaN(float64(v)) && !math.IsInf(float64(v), 0) }
+	fin := func(v float32) float32 {
+		if isFinite(v) {
+			return rustcompat.Clamp(v, -maxFreeformCoord, maxFreeformCoord)
+		}
+		return 0
+	}
+	f.W = F32(rustcompat.Max(fin(float32(f.W)), 0))
+	f.H = F32(rustcompat.Max(fin(float32(f.H)), 0))
+	if isFinite(float32(f.Alpha)) {
+		f.Alpha = F32(rustcompat.Clamp(float32(f.Alpha), 0, 1))
+	} else {
+		f.Alpha = 1
+	}
+	paths := Vec[FreePath]{}
+	for _, p := range f.Paths[:min(len(f.Paths), MaxFreeformPaths)] {
+		pts := Vec[[2]F32]{}
+		for _, pt := range p.Pts {
+			if len(pts) == MaxFreeformPoints {
+				break
+			}
+			if isFinite(float32(pt[0])) && isFinite(float32(pt[1])) {
+				pts = append(pts, [2]F32{F32(fin(float32(pt[0]))), F32(fin(float32(pt[1])))})
+			}
+		}
+		if len(pts) > 0 {
+			paths = append(paths, FreePath{Pts: pts, Closed: p.Closed})
+		}
+	}
+	f.Paths = paths
+	return f
+}
