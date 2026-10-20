@@ -65,17 +65,10 @@ func TestPropsMatchRust(t *testing.T) {
 		}
 		return lines
 	}
-	// The parts of a document Go doesn't type yet, as Rust writes their defaults: documents
-	// carry them so both sides start from the same (Raw keeps what it reads).
-	defaults := ask([][]byte{[]byte("d{}")})[0]
-	untyped, err := untypedParts(defaults)
-	if err != nil {
-		t.Fatalf("default document %s: %v", defaults, err)
-	}
 	rng := rand.New(rand.NewPCG(4, 11))
-	inputs := propEdgeInputs(untyped)
+	inputs := propEdgeInputs()
 	for range n {
-		g := &pgen{rng: rng, hostile: rng.IntN(5) < 2, mistakes: 1 + rng.IntN(2), untyped: untyped}
+		g := &pgen{rng: rng, hostile: rng.IntN(5) < 2, mistakes: 1 + rng.IntN(2)}
 		inputs = append(inputs, g.input())
 	}
 	lines := ask(inputs)
@@ -99,41 +92,8 @@ func TestPropsMatchRust(t *testing.T) {
 
 func readCounts(m map[byte]int) string {
 	var b strings.Builder
-	for _, op := range "cptrexkbdOMULFWEQBsgPCRKSXTNmAGI" {
+	for _, op := range "cptrexkbdOMULFWEQBsgPCRKSXTNmAGIynahYHzZljw" {
 		b.WriteString(string(op) + "=" + strconv.Itoa(m[byte(op)]) + " ")
-	}
-	return b.String()
-}
-
-// untypedParts are the default document's fields that are Raw here, as JSON members.
-func untypedParts(pretty string) (string, error) {
-	text := unescapeLine(pretty)
-	var d Document
-	if err := serdejson.Unmarshal([]byte(text), &d); err != nil {
-		return "", err
-	}
-	var b strings.Builder
-	for _, f := range []struct {
-		name string
-		raw  Raw
-	}{{"styles", d.Styles}, {"numbering", d.Numbering}} {
-		b.WriteString(`,"` + f.name + `":` + string(f.raw))
-	}
-	return b.String(), nil
-}
-
-// unescapeLine undoes the oracle's one-line escaping (\\ for \, \n for a newline).
-func unescapeLine(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\\' && i+1 < len(s) {
-			i++
-			if s[i] == 'n' {
-				b.WriteByte('\n')
-				continue
-			}
-		}
-		b.WriteByte(s[i])
 	}
 	return b.String()
 }
@@ -275,6 +235,16 @@ func propsAnswer(x []byte) string {
 			return "ERROR"
 		}
 		return show(t.InsetsPt())
+	case 'y':
+		v = new(StyleSheet)
+	case 'n':
+		v = new(Numbering)
+	case 'a':
+		v = new(Table)
+	case 'h':
+		v = new(ContentControl)
+	case 'Y', 'H', 'z', 'Z', 'l', 'j', 'w':
+		return modelAnswer(op, js)
 	default:
 		return "BAD OP"
 	}
@@ -298,11 +268,7 @@ type pgen struct {
 	b        strings.Builder
 	hostile  bool
 	mistakes int
-	untyped  string
 	depth    int
-	// The untyped parts' place in the input, which damage leaves alone (Raw keeps them as read,
-	// where Rust would drop a mangled key and fill in its default).
-	untypedAt, untypedEnd int
 }
 
 func (g *pgen) chance(n int) bool { return g.rng.IntN(n) == 0 }
@@ -739,8 +705,19 @@ func (g *pgen) cellProps() {
 	})
 }
 
-// block writes a paragraph block: serde reads it all as Content, then the paragraph from that.
+// block writes a paragraph or table block: serde reads it all as Content, then the paragraph or
+// table from that.
 func (g *pgen) block() {
+	if g.depth < 3 && g.chance(6) {
+		kind := `"table"`
+		if g.oops(10) {
+			kind = g.pick(`"Table"`, `{"table":null}`)
+		}
+		fields := g.tableFields()
+		at := g.rng.IntN(len(fields) + 1)
+		g.object(append(append(append([]pfield(nil), fields[:at]...), req("kind", func(g *pgen) { g.w(kind) })), fields[at:]...))
+		return
+	}
 	text := g.pick("", "abc", "héllo wörld", "😀x", "a\tb")
 	runs := func(g *pgen) {
 		g.list(func(g *pgen) {
@@ -904,9 +881,6 @@ func (g *pgen) idMap(val func(*pgen)) {
 func (g *pgen) document() {
 	g.w(`{"body":`)
 	g.list((*pgen).block)
-	g.untypedAt = g.b.Len()
-	g.w(g.untyped)
-	g.untypedEnd = g.b.Len()
 	if g.chance(2) {
 		g.w(`,"core":`)
 		s := (*pgen).str
@@ -938,7 +912,7 @@ func (g *pgen) document() {
 }
 
 func (g *pgen) input() []byte {
-	ops := "cccppptreexkbbbbddOMULFWEQBssgPCRKSXTNNmmAGI"
+	ops := "cccppptreexkbbbbddOMULFWEQBssgPCRKSXTNNmmAGIyynnaahhYYHzZZljjw"
 	op := ops[g.rng.IntN(len(ops))]
 	g.b.WriteByte(op)
 	pair := func(f func(*pgen)) {
@@ -1023,13 +997,12 @@ func (g *pgen) input() []byte {
 		g.w(",")
 		g.f32()
 		g.w("]")
+	default:
+		g.modelInput(op)
 	}
 	out := []byte(g.b.String())
 	if g.oops(15) && len(out) > 2 {
 		i := 1 + g.rng.IntN(len(out)-1)
-		if i >= g.untypedAt && i < g.untypedEnd {
-			i = g.untypedAt
-		}
 		switch g.rng.IntN(2) {
 		case 0:
 			out = out[:i]
@@ -1043,7 +1016,7 @@ func (g *pgen) input() []byte {
 
 // propEdgeInputs are fixed inputs whose outcome depends on details: where a value is read from
 // (JSON text or Content), number edges, and the string forms of colours.
-func propEdgeInputs(untyped string) [][]byte {
+func propEdgeInputs() [][]byte {
 	var out [][]byte
 	add := func(op byte, js string) { out = append(out, append([]byte{op}, js...)) }
 	para := func(field, v string) string {
@@ -1084,10 +1057,9 @@ func propEdgeInputs(untyped string) [][]byte {
 	for _, js := range []string{`{}`, `{"partialMargins":[null,1,null,2]}`, `{"textDirectionSet":false,"hideMark":true}`} {
 		add('e', js)
 	}
-	// Documents carry the untyped parts (Raw keeps what it reads, where Rust fills in defaults).
 	for _, js := range []string{`"x":1`, `"body":[]`, `"body":[{"kind":"para","text":"","runs":[]}],"media":{}`, `"footnoteSeparators":{}`,
 		`"footnoteSeparators":{"separator":[]}`, `"core":{"revision":4294967295}`, `"body":null`, `"core":[]`, `"core":["t"]`} {
-		add('d', "{"+js+untyped+"}")
+		add('d', "{"+js+"}")
 	}
 	// Every number format over the first numbers and the edges of each system.
 	for _, f := range numFormatNames {
@@ -1108,5 +1080,5 @@ func propEdgeInputs(untyped string) [][]byte {
 	add('E', `{"symFont":" ","font":"Arial"}`)
 	add('E', `{"symFont":"\u3000"}`)
 	add('E', `{"size":null}`)
-	return out
+	return append(out, modelEdgeInputs()...)
 }

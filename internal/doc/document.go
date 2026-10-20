@@ -175,24 +175,52 @@ func (d *Document) FormatRange(a, b Pos, f func(*CharProps)) error {
 	return nil
 }
 
-// NormalizeRuns repairs every modelled paragraph's runs (Rust: on opening a JSON document).
-// Paragraphs inside tables and parts are kept as read.
+// NormalizeRuns repairs every paragraph's runs, in the body and the parts, inside tables too
+// (Rust: on opening a JSON document).
 func (d *Document) NormalizeRuns() {
-	for i, b := range d.Body {
-		if b.Para != nil {
-			c := b.Para.Clone()
-			c.Normalize()
-			d.Body[i] = Block{Para: c}
+	norm := func(p *Paragraph) *Paragraph {
+		c := p.Clone()
+		c.Normalize()
+		return c
+	}
+	d.Body = mapParas(d.Body, norm)
+	if len(d.Parts) > 0 {
+		parts := make(U32Map[Part], len(d.Parts))
+		for id, p := range d.Parts {
+			p.Blocks = mapParas(p.Blocks, norm)
+			parts[id] = p
 		}
+		d.Parts = parts
 	}
 }
 
-// EnsureNonempty gives the body a paragraph to type in when it has none or ends with a table,
-// and every empty part one, as Rust's ensure_nonempty does after every edit. ok is false when
-// Rust would also repair something the model can't change yet (an empty or table-ended table
-// cell).
-func (d *Document) EnsureNonempty() (ok bool) {
-	ok = !d.needsUnmodelledRepair()
+// mapParas is bl with every paragraph, at any depth, replaced by f's; tables are copied on the
+// way (copy on write).
+func mapParas(bl Vec[Block], f func(*Paragraph) *Paragraph) Vec[Block] {
+	out := make(Vec[Block], len(bl))
+	for i, b := range bl {
+		switch {
+		case b.Para != nil:
+			out[i] = Block{Para: f(b.Para)}
+		case b.Table != nil:
+			t := b.Table.Clone()
+			for r := range t.Rows {
+				for c := range t.Rows[r].Cells {
+					t.Rows[r].Cells[c].Blocks = mapParas(t.Rows[r].Cells[c].Blocks, f)
+				}
+			}
+			out[i] = Block{Table: t}
+		default:
+			out[i] = b
+		}
+	}
+	return out
+}
+
+// EnsureNonempty gives every story at least one paragraph, as Rust's ensure_nonempty does after
+// every edit: the body one to type in when it has none or ends with a table, every cell of a
+// top-level table when it is empty or ends with a table, and every empty part.
+func (d *Document) EnsureNonempty() {
 	hasPara := false
 	for _, b := range d.Body {
 		if b.Para != nil {
@@ -200,7 +228,24 @@ func (d *Document) EnsureNonempty() (ok bool) {
 		}
 	}
 	if !hasPara || (len(d.Body) > 0 && d.Body[len(d.Body)-1].Para == nil) {
-		d.Body = append(d.Body, Block{Para: NewParagraph()})
+		d.Body = append(slices.Clip(d.Body), Block{Para: NewParagraph()})
+	}
+	needs := func(bl Vec[Block]) bool { return len(bl) == 0 || bl[len(bl)-1].Para == nil }
+	for i, b := range d.Body {
+		if b.Table == nil || !slices.ContainsFunc(b.Table.Rows, func(r Row) bool {
+			return slices.ContainsFunc(r.Cells, func(c Cell) bool { return needs(c.Blocks) })
+		}) {
+			continue
+		}
+		t := b.Table.Clone()
+		for r := range t.Rows {
+			for c := range t.Rows[r].Cells {
+				if cell := &t.Rows[r].Cells[c]; needs(cell.Blocks) {
+					cell.Blocks = append(cell.Blocks, Block{Para: NewParagraph()})
+				}
+			}
+		}
+		d.Body[i] = Block{Table: t}
 	}
 	for _, p := range d.Parts {
 		if len(p.Blocks) == 0 {
@@ -216,49 +261,28 @@ func (d *Document) EnsureNonempty() (ok bool) {
 			break
 		}
 	}
-	return ok
-}
-
-type rawBlocks struct {
-	Blocks []struct {
-		Kind string `json:"kind"`
-	} `json:"blocks"`
-}
-
-// needsUnmodelledRepair reports a top-level table with an empty or table-ended cell.
-func (d *Document) needsUnmodelledRepair() bool {
-	for _, b := range d.Body {
-		if b.Para != nil {
-			continue
-		}
-		var t struct {
-			Rows []struct {
-				Cells []rawBlocks `json:"cells"`
-			} `json:"rows"`
-		}
-		if !b.Table.Get(&t) {
-			return true
-		}
-		for _, r := range t.Rows {
-			for _, c := range r.Cells {
-				if len(c.Blocks) == 0 || c.Blocks[len(c.Blocks)-1].Kind == "table" {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 // BodyHasObject reports an inline object of the given type ("controlStart", "field", …) in a
-// body paragraph or inside a table of the body.
+// body paragraph, at any depth of tables.
 func (d *Document) BodyHasObject(typ string) bool {
 	needle := []byte(`"type":"` + typ + `"`)
-	for _, b := range d.Body {
-		if b.Para == nil {
-			if bytes.Contains(b.Table, needle) {
-				return true
+	return blocksHaveObject(d.Body, needle)
+}
+
+func blocksHaveObject(bl Vec[Block], needle []byte) bool {
+	for _, b := range bl {
+		if b.Table != nil {
+			for _, r := range b.Table.Rows {
+				for _, c := range r.Cells {
+					if blocksHaveObject(c.Blocks, needle) {
+						return true
+					}
+				}
 			}
+			continue
+		}
+		if b.Para == nil {
 			continue
 		}
 		for _, o := range b.Para.Objects {

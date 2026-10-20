@@ -8,8 +8,8 @@ import (
 	"github.com/computernut43/craft-libs/serdejson"
 )
 
-// Raw is the JSON of a part of the model the Go port doesn't type yet (tables, inline objects,
-// sections, styles, numbering, settings, …), kept as read (compacted) and written back as it is.
+// Raw is the JSON of a part of the model the Go port doesn't type yet (inline objects, a
+// paragraph's section), kept as read (compacted) and written back as it is.
 // Where Rust would refuse or normalise such a part (a wrong type, a number written 1 for 1.0, a
 // missing field it fills with its default, an unknown field it drops), Raw keeps what the file
 // says: it is checked only as JSON. MIGRATION.md lists these parts; they shrink as types land.

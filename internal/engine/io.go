@@ -36,9 +36,7 @@ func OpenBytes(name string, data []byte) (*doc.Document, error) {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	d.NormalizeRuns()
-	if !d.EnsureNonempty() {
-		return nil, notPorted("documents with empty table cells")
-	}
+	d.EnsureNonempty()
 	if d.NeedsDateRefresh() {
 		return nil, notPorted("documents with DATE or TIME fields (opening refreshes them)")
 	}

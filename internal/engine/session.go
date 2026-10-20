@@ -200,12 +200,7 @@ func (s *Session) Run(id string, params Params) (result any, err error) {
 		}
 		if spec.Mutates {
 			s.Dirty = true
-			if !s.Doc.EnsureNonempty() {
-				s.Doc, s.Sel, s.Pending = before.doc, before.sel, before.pending
-				s.history, s.redo, s.typingOpen, s.evicted = before.history, before.redo, before.typingOpen, before.evicted
-				result, err = nil, notPorted("%s: repairing empty table cells or parts", id)
-				return
-			}
+			s.Doc.EnsureNonempty()
 		}
 		s.clampSelection()
 		// A selection command that moves the insertion point ends the typing group (#419).
