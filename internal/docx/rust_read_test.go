@@ -1114,7 +1114,8 @@ func (g *docxGen) drawing() {
 			g.leaf("wp:wrapNone")
 		}
 	}
-	g.b.WriteString(`<wp:docPr id="` + g.pick("1", "2", "0", "x") + `" name="Picture 1"`)
+	g.b.WriteString(`<wp:docPr id="` + g.pick("1", "2", "0", "x") + `" name="` + g.pick("Picture 1", "Picture 1", "Ink Pen 3", "Ink highlighter 4 #12", "Ink Pencil 2 #x #7",
+		"Ink Bogus 1", "ink Pen", "Ink\tPen 3 #+5", "Ink Pen 3 #4294967296", "Ink Pen #9 #3", "Ink Pen 3 x #-1 #2") + `"`)
 	for _, a := range []string{"descr", "title"} {
 		if g.chance(2) {
 			g.b.WriteString(` ` + a + `="` + xmlEsc(g.pick("A cat", "", strings.Repeat("d", 300), "line\nbreak")) + `"`)
@@ -1333,6 +1334,76 @@ func (g *docxGen) canvas() {
 	g.b.WriteString(`</wpc:wpc>`)
 }
 
+// custGeom writes custom geometry: paths of lines, curves, arcs and closes with random sizes and
+// points, sometimes more than a freeform keeps.
+func (g *docxGen) custGeom() {
+	g.b.WriteString(`<a:custGeom><a:avLst/><a:gdLst/><a:pathLst>`)
+	coord := []string{"0", "100", "21600", "-50", "5000", "99999999999999", "-99999999999999", "x", "1e3", " 7 ", "33"}
+	pt := func() {
+		g.b.WriteString(`<a:pt`)
+		if !g.chance(12) {
+			g.b.WriteString(` x="` + g.pick(coord...) + `"`)
+		}
+		if !g.chance(12) {
+			g.b.WriteString(` y="` + g.pick(coord...) + `"`)
+		}
+		g.b.WriteString(`/>`)
+	}
+	paths := 1 + g.rng.IntN(3)
+	if g.chance(30) {
+		paths = 260
+	}
+	for range paths {
+		g.b.WriteString(`<a:path`)
+		for _, a := range []string{"w", "h"} {
+			if g.chance(2) {
+				g.b.WriteString(` ` + a + `="` + g.pick("100", "21600", "0", "-5", "x", "99999999999999", "1") + `"`)
+			}
+		}
+		if g.chance(4) {
+			g.b.WriteString(` fill="` + g.pick("none", "norm", "darken") + `"`)
+		}
+		g.b.WriteString(`>`)
+		if g.chance(5) {
+			// Drawn back to where it started.
+			if g.chance(3) {
+				g.b.WriteString(`<a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="0" y="0"/></a:lnTo>`)
+			} else {
+				g.b.WriteString(`<a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="100" y="0"/></a:lnTo><a:lnTo><a:pt x="100" y="100"/></a:lnTo><a:lnTo><a:pt x="0" y="` + g.pick("0", "1") + `"/></a:lnTo>`)
+			}
+		}
+		segs := g.rng.IntN(7)
+		if paths == 1 && g.chance(40) {
+			segs = 6000
+		}
+		for i := range segs {
+			if segs > 1000 && i == segs-2 {
+				// Past the points a path keeps: a new subpath after it.
+				g.b.WriteString(`<a:moveTo><a:pt x="5" y="5"/></a:moveTo><a:lnTo><a:pt x="9" y="9"/></a:lnTo>`)
+				break
+			}
+			if segs > 1000 {
+				g.b.WriteString(`<a:lnTo><a:pt x="` + strconv.Itoa(i) + `" y="` + strconv.Itoa(i%97) + `"/></a:lnTo>`)
+				continue
+			}
+			name := g.pick("a:moveTo", "a:lnTo", "a:lnTo", "a:cubicBezTo", "a:quadBezTo", "a:arcTo", "a:close", "a:junk")
+			g.b.WriteString(`<` + name + `>`)
+			n := map[string]int{"a:moveTo": 1, "a:lnTo": 1, "a:cubicBezTo": 3, "a:quadBezTo": 2}[name]
+			if g.chance(6) {
+				n = g.rng.IntN(4)
+			} else if g.chance(30) {
+				n = 20
+			}
+			for range n {
+				pt()
+			}
+			g.b.WriteString(`</` + name + `>`)
+		}
+		g.b.WriteString(`</a:path>`)
+	}
+	g.b.WriteString(`</a:pathLst></a:custGeom>`)
+}
+
 // colorEl writes a DrawingML colour element with random modifiers.
 func (g *docxGen) colorEl() {
 	name := g.pick("a:srgbClr", "a:schemeClr", "a:sysClr", "a:prstClr", "a:hslClr", "a:srgbClr")
@@ -1429,7 +1500,17 @@ func (g *docxGen) wsp() {
 				g.b.WriteString(` w="` + xmlEsc(g.num()()) + `"`)
 			}
 			g.b.WriteString(`>`)
-			if g.chance(2) {
+			if g.chance(3) {
+				c := g.pick(`srgbClr val="FF0000"`, `schemeClr val="accent1"`)
+				if g.chance(4) {
+					// The alpha on a second colour, which isn't the outline's.
+					g.b.WriteString(`<a:solidFill><a:srgbClr val="00FF00"/><a:srgbClr val="FF0000"><a:alpha val="50000"/></a:srgbClr></a:solidFill>`)
+					c = ""
+				}
+				if c != "" {
+					g.b.WriteString(`<a:solidFill><a:` + c + `><a:alpha val="` + g.pick("50000", "-5", "200000", "x", "0", "33333") + `"/></a:` + strings.Fields(c)[0] + `></a:solidFill>`)
+				}
+			} else if g.chance(2) {
 				g.fillEl()
 			}
 			switch g.rng.IntN(3) {
@@ -1474,8 +1555,8 @@ func (g *docxGen) wsp() {
 			}
 			g.b.WriteString(`</a:effectLst>`)
 		}
-		if g.chance(g.exotic) {
-			g.b.WriteString(`<a:custGeom><a:pathLst><a:path w="10" h="10"><a:moveTo><a:pt x="0" y="0"/></a:moveTo></a:path></a:pathLst></a:custGeom>`)
+		if g.chance(4) {
+			g.custGeom()
 		}
 		if g.chance(g.exotic) {
 			g.b.WriteString(`<a:solidFill><a:scrgbClr r="50000" g="0" b="0"/></a:solidFill>`)

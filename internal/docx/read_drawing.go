@@ -3,7 +3,7 @@ package docx
 // Drawings (w:drawing): their frame, anchoring and wrapping, pictures, shapes, groups and
 // canvases (Rust crates/docx/src/read/story.rs read_drawing, read_pic, read_wsp, read_group,
 // read_canvas, group_members, nv_alt, anchor_float, wrap_polygon, xfrm_spin, group_xfrm). Charts,
-// diagrams, ink and freeforms aren't ported yet: meeting one makes the read refuse the file.
+// diagrams and native ink aren't ported yet: meeting one makes the read refuse the file.
 
 import (
 	"slices"
@@ -91,12 +91,25 @@ func (r *reader) readDrawing(sc *storyCtx, d *El, rels Rels) (doc.Object, bool) 
 		if wsp == nil {
 			return doc.Object{}, false
 		}
-		// Not ported yet: freeforms (custom geometry, ink drawn as freeforms) and colours in
-		// linear RGB (a:scrgbClr needs glibc's pow).
+		// Not ported yet: colours in linear RGB (a:scrgbClr needs glibc's pow).
 		if !r.wspPorted(wsp) {
 			return doc.Object{}, false
 		}
 		obj = r.readWsp(sc, wsp, rels, w, h, float)
+		// A freeform: whether it's ink WordCraft wrote.
+		if sh, ok := obj.InlineObject.(doc.Shape); ok && sh.Freeform != nil && docPr != nil {
+			if name, ok := docPr.Attr("name"); ok {
+				if tool, ok := inkTool(name); ok {
+					f := *sh.Freeform
+					f.Ink = &tool
+					if o, ok := inkOrder(name); ok {
+						f.Order = &o
+					}
+					sh.Freeform = &f
+					obj = doc.Object{InlineObject: sh}
+				}
+			}
+		}
 	}
 	if alt != "" {
 		if o, ok := obj.WithAltText(alt); ok {
@@ -132,13 +145,9 @@ func (r *reader) readDrawing(sc *storyCtx, d *El, rels Rels) (doc.Object, bool) 
 	return obj, true
 }
 
-// wspPorted refuses (false) a shape whose reading isn't ported yet: freeforms (custom geometry,
-// ink drawn as freeforms) and colours in linear RGB (a:scrgbClr needs glibc's pow).
+// wspPorted refuses (false) a shape whose reading isn't ported yet: colours in linear RGB
+// (a:scrgbClr needs glibc's pow).
 func (r *reader) wspPorted(wsp *El) bool {
-	if sp := wsp.Child("wps:spPr"); sp != nil && sp.Child("a:custGeom") != nil {
-		r.unported("freeform shapes")
-		return false
-	}
 	if wsp.Find("a:scrgbClr") != nil {
 		r.unported("linear RGB colours (a:scrgbClr)")
 		return false
@@ -775,8 +784,17 @@ func (r *reader) readWsp(sc *storyCtx, wsp *El, rels Rels, w, h float32, float d
 			}
 		}
 	}
+	// A freeform: its custom geometry (in a group too).
+	var freeform *doc.Freeform
+	if sppr != nil {
+		if f, ok := custGeom(sppr, w, h); ok {
+			f.Alpha = doc.F32(lineAlpha(ln))
+			kind = doc.ShapeFreeform
+			freeform = &f
+		}
+	}
 	return doc.Object{InlineObject: doc.Shape{Kind: kind, W: doc.F32(w), H: doc.F32(h), Fill: fill, Stroke: paint.stroke,
-		StrokeWidth: doc.F32(paint.strokeWidth), Float: float, Story: story, Effects: effects, Extra: extra}}
+		StrokeWidth: doc.F32(paint.strokeWidth), Float: float, Story: story, Freeform: freeform, Effects: effects, Extra: extra}}
 }
 
 // setShapeID keeps drawing id id on a shape read from a file.
