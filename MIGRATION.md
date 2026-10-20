@@ -275,6 +275,7 @@ for `verified` rows.
 | Printing | `crates/ui-egui/src/printing.rs`, craft-print | not started |
 | Read Aloud | `crates/engine/src/speech.rs`, `crates/ui-egui/src/read_aloud.rs` | not started |
 | macOS, Windows, Linux, FreeBSD desktop | `apps/wordcraft` | not started |
+| Linux builds of the Go command line (x86-64, ARM64; static, no cgo) | — (Go only) | done: every CI run builds `wordcraft-cli` for Linux, smoke-tests it and keeps it as a workflow artifact (`linux-build` job) |
 | Browser (wasm), IndexedDB storage | `apps/wordcraft-web` | not started |
 | Packaging (DMG, MSI, AppImage, deb/rpm, Flatpak, FreeBSD) | `packaging/`, `.github/workflows/release.yml` | not started |
 
@@ -397,6 +398,7 @@ strongest. Layout, render and UI come later, after the model is proven.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | Linux builds of `wordcraft-cli` in CI |
 | 2026-10-20 | minor | M1c.2: `internal/docx` package access with a zip reader matching the zip crate, verified against `package.rs` |
 | 2026-10-20 | minor | M1c.1: `internal/docx` XML tree, verified against `crates/docx/src/xml.rs` |
 | 2026-10-20 | minor | M1b: `internal/engine` core (session, undo, registry, seven commands, JSON open/save) and `cmd/wordcraft-cli`, verified against the Rust CLI by random scripts |

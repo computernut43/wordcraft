@@ -41,6 +41,41 @@ jobs:
           go-version-file: go.mod
       - run: go run ./tools/ci test
 
+  # A Linux download of the Go command line on every run: static binaries (no cgo) for x86-64
+  # and ARM64, kept as workflow artifacts.
+  linux-build:
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w" -o dist/wordcraft-cli ./cmd/wordcraft-cli
+          cp LICENSE-APACHE LICENSE-MIT NOTICE ATTRIBUTION.md dist/
+      - name: Smoke test
+        if: matrix.arch == 'amd64'
+        run: |
+          dist/wordcraft-cli commands | grep -q '^text.insert '
+          printf '%s' '{"body":[{"kind":"para","text":"Hello world","runs":[{"len":11}]}]}' > in.json
+          dist/wordcraft-cli run --file in.json --cmd 'select.text={"text":"world"}' --cmd 'format.bold={"value":true}' --save out.json
+          grep -q '"bold": true' out.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wordcraft-cli-linux-${{ matrix.arch }}
+          path: dist/
+          retention-days: 30
+
   reference:
     timeout-minutes: 60
     runs-on: ubuntu-latest
