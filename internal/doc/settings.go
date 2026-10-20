@@ -281,6 +281,9 @@ const (
 	MaxTextBoxInset = 20_116_800
 )
 
+// MaxLinkedBoxes is the longest chain of linked text boxes (Rust MAX_LINKED_BOXES).
+const MaxLinkedBoxes = 256
+
 // TextBoxInset are Word's default text box margins (left, top, right, bottom), EMU.
 var TextBoxInset = [4]uint32{textBoxInsetH, textBoxInsetV, textBoxInsetH, textBoxInsetV}
 

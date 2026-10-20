@@ -97,7 +97,14 @@ type reader struct {
 	main          string
 	contentTypes  *ContentTypes
 	embedded      map[string]*embeddedPart
-	err           error
+	// txbxLinks are the linked text boxes read: (wps:txbx/@id or wps:linkedTxbx/@id, seq (0 for
+	// the box holding the text), text box part).
+	txbxLinks [][3]uint32
+	// glued are the drawing ids connectors are glued to; shapeIDs whether any shape's id was kept
+	// while reading (those not glued to are dropped at the end).
+	glued    map[uint32]bool
+	shapeIDs bool
+	err      error
 }
 
 // embeddedPart is one part kept verbatim: its content type and its own relationships.
@@ -182,6 +189,7 @@ func readOpened(pkg *Package) (*doc.Document, error) {
 		perms:         map[string]uint32{},
 		main:          main,
 		embedded:      map[string]*embeddedPart{},
+		glued:         map[uint32]bool{},
 	}
 	r.pc.Alias = map[string]string{}
 	r.pc.MajorFont = d.Settings.MajorFont
@@ -315,6 +323,10 @@ func readOpened(pkg *Package) (*doc.Document, error) {
 		d.Passthrough[embeddedParts] = r.manifestBytes()
 	}
 	r.finishMoves()
+	linkTextBoxes(d, r.txbxLinks)
+	if r.shapeIDs {
+		keepGluedIDs(d, r.glued)
+	}
 	if r.err == nil {
 		r.err = r.pc.err
 	}

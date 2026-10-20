@@ -264,6 +264,7 @@ type docxGen struct {
 	chain                                                  bool
 	sdtContent                                             bool
 	images                                                 []string
+	txbxDepth                                              int
 	sdtStack                                               []bool
 }
 
@@ -1131,8 +1132,10 @@ func (g *docxGen) drawing() {
 	switch {
 	case g.chance(g.exotic):
 		g.b.WriteString(`<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId1"/></a:graphicData>`)
-	case g.chance(g.exotic):
-		g.b.WriteString(`<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr/></wps:wsp></a:graphicData>`)
+	case g.chance(3):
+		g.b.WriteString(`<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">`)
+		g.wsp()
+		g.b.WriteString(`</a:graphicData>`)
 	case g.chance(10):
 		g.b.WriteString(`<a:graphicData uri="x"/>`)
 	default:
@@ -1162,6 +1165,200 @@ func (g *docxGen) drawing() {
 		g.close("wp:inline")
 	}
 	g.b.WriteString(`</w:drawing>`)
+}
+
+// colorEl writes a DrawingML colour element with random modifiers.
+func (g *docxGen) colorEl() {
+	name := g.pick("a:srgbClr", "a:schemeClr", "a:sysClr", "a:prstClr", "a:hslClr", "a:srgbClr")
+	switch name {
+	case "a:srgbClr":
+		g.b.WriteString(`<a:srgbClr val="` + g.pick(colorPool...) + `">`)
+	case "a:schemeClr":
+		g.b.WriteString(`<a:schemeClr val="` + g.pick("accent1", "accent6", "tx1", "bg1", "dk2", "lt2", "hlink", "folHlink", "phClr", "x") + `">`)
+	case "a:sysClr":
+		g.b.WriteString(`<a:sysClr val="` + g.pick("windowText", "window", "highlight", "btnFace", "x") + `"`)
+		if g.chance(2) {
+			g.b.WriteString(` lastClr="` + g.pick(colorPool...) + `"`)
+		}
+		g.b.WriteString(`>`)
+	case "a:prstClr":
+		g.b.WriteString(`<a:prstClr val="` + g.pick("black", "white", "red", "green", "lime", "blue", "yellow", "cyan", "aqua", "magenta", "fuchsia", "gray", "grey", "silver",
+			"ltgray", "ltGrey", "lightgray", "lightgrey", "dkgray", "dkGrey", "darkgray", "darkgrey", "maroon", "navy", "olive", "purple", "teal", "orange", "brown", "pink",
+			"gold", "darkBlue", "dkblue", "darkred", "dkRed", "darkgreen", "dkgreen", "lightblue", "ltblue", "coral", "salmon", "tomato", "violet", "indigo", "beige",
+			"ivory", "White", "nope") + `">`)
+	case "a:hslClr":
+		g.b.WriteString(`<a:hslClr hue="` + g.pick("0", "14400000", "-60000", "99999999999", "-12345678", "-1") + `" sat="` + g.pick("100000", "50000", "-5", "200000") + `" lum="` + g.pick("50000", "0", "100000", "x") + `">`)
+	}
+	for range g.rng.IntN(3) {
+		g.b.WriteString(`<a:` + g.pick("lumMod", "lumOff", "tint", "shade", "alpha", "satMod") + ` val="` + g.pick("75000", "25000", "50000", "-30000", "2000000", "x", "100000") + `"/>`)
+	}
+	g.b.WriteString(`</` + name + `>`)
+}
+
+func (g *docxGen) fillEl() {
+	switch g.rng.IntN(5) {
+	case 0:
+		g.b.WriteString(`<a:noFill/>`)
+	case 1:
+		g.b.WriteString(`<a:gradFill><a:gsLst><a:gs pos="0">`)
+		g.colorEl()
+		g.b.WriteString(`</a:gs></a:gsLst></a:gradFill>`)
+	case 2:
+		g.b.WriteString(`<a:pattFill prst="pct5"><a:fgClr>`)
+		g.colorEl()
+		g.b.WriteString(`</a:fgClr></a:pattFill>`)
+	default:
+		g.b.WriteString(`<a:solidFill>`)
+		g.colorEl()
+		g.b.WriteString(`</a:solidFill>`)
+	}
+}
+
+// wsp writes a Word shape: preset, fill, outline, effects, style, text box and connector.
+func (g *docxGen) wsp() {
+	g.b.WriteString(`<wps:wsp>`)
+	if g.chance(4) {
+		g.b.WriteString(`<wps:cNvSpPr txBox="` + g.pick("1", "true", "0") + `"/>`)
+	}
+	if g.chance(5) {
+		g.b.WriteString(`<wps:cNvCnPr>`)
+		for _, t := range []string{"a:stCxn", "a:endCxn"} {
+			if g.chance(3) == false {
+				g.b.WriteString(`<` + t + ` id="` + g.pick("1", "2", "0", "x", "7") + `" idx="` + g.pick("0", "3", "100", "-1") + `"/>`)
+			}
+		}
+		g.b.WriteString(`</wps:cNvCnPr>`)
+	}
+	if !g.chance(6) {
+		g.b.WriteString(`<wps:spPr>`)
+		if g.chance(2) {
+			g.b.WriteString(`<a:xfrm rot="` + g.pick("0", "5400000", "1234567") + `"><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></a:xfrm>`)
+		}
+		if !g.chance(5) {
+			g.b.WriteString(`<a:prstGeom prst="` + g.pick("rect", "roundRect", "ellipse", "triangle", "rtTriangle", "diamond", "line", "straightConnector1", "bentConnector3", "curvedConnector2",
+				"rightArrow", "star5", "heart", "flowChartOr", "wedgeRectCallout", "cloud", "snipRoundRect", "bogus") + `">`)
+			if g.chance(2) {
+				g.b.WriteString(`<a:avLst><a:gd name="adj" fmla="` + g.pick("val 16667", " val -5 ", "val 99999999", "val x", "pin 0", "val50000") + `"/></a:avLst>`)
+			}
+			g.b.WriteString(`</a:prstGeom>`)
+		}
+		if g.chance(3) {
+			g.fillEl()
+		}
+		if g.chance(8) {
+			g.b.WriteString(`<a:blipFill/>`)
+		}
+		if g.chance(2) {
+			g.b.WriteString(`<a:ln`)
+			if g.chance(2) {
+				g.b.WriteString(` w="` + xmlEsc(g.num()()) + `"`)
+			}
+			g.b.WriteString(`>`)
+			if g.chance(2) {
+				g.fillEl()
+			}
+			switch g.rng.IntN(3) {
+			case 0:
+				g.b.WriteString(`<a:prstDash val="` + g.pick("dash", "sysDot", "lgDashDotDot", "solid", "x") + `"/>`)
+			case 1:
+				g.b.WriteString(`<a:custDash>`)
+				for range g.rng.IntN(4) {
+					g.b.WriteString(`<a:ds d="` + g.pick("100000", "50%", " 3000 ", "-1", "x", "1e3%", "4294967296", "12.3456%", "0.0005%") + `" sp="` + g.pick("100000", "25.5%", "0") + `"/>`)
+				}
+				g.b.WriteString(`</a:custDash>`)
+			}
+			for _, t := range []string{"a:headEnd", "a:tailEnd"} {
+				if g.chance(3) {
+					g.b.WriteString(`<` + t + ` type="` + g.pick("none", "triangle", "arrow", "oval") + `"/>`)
+				}
+			}
+			g.b.WriteString(`</a:ln>`)
+		}
+		if g.chance(3) {
+			g.b.WriteString(`<a:effectLst>`)
+			if g.chance(2) {
+				g.b.WriteString(`<a:outerShdw blurRad="` + g.pick("50800", "-1", "99999999999", "x") + `" dist="` + g.pick("38100", "0", "9999999999") + `" dir="` + g.pick("2700000", "-5400000", "x", "21600000") + `"`)
+				if g.chance(2) {
+					g.b.WriteString(` rotWithShape="` + g.pick("0", "1", "false", "true", "on", "off", "x") + `"`)
+				}
+				g.b.WriteString(`>`)
+				if g.chance(4) == false {
+					g.colorEl()
+				}
+				g.b.WriteString(`</a:outerShdw>`)
+			}
+			if g.chance(2) {
+				g.b.WriteString(`<a:glow rad="` + g.pick("63500", "0", "99999999999") + `">`)
+				if g.chance(2) {
+					g.colorEl()
+				}
+				g.b.WriteString(`</a:glow>`)
+			}
+			if g.chance(2) {
+				g.b.WriteString(`<a:softEdge rad="` + g.pick("31750", "0", "-5", "9999999999") + `"/>`)
+			}
+			g.b.WriteString(`</a:effectLst>`)
+		}
+		if g.chance(g.exotic) {
+			g.b.WriteString(`<a:custGeom><a:pathLst><a:path w="10" h="10"><a:moveTo><a:pt x="0" y="0"/></a:moveTo></a:path></a:pathLst></a:custGeom>`)
+		}
+		if g.chance(g.exotic) {
+			g.b.WriteString(`<a:solidFill><a:scrgbClr r="50000" g="0" b="0"/></a:solidFill>`)
+		}
+		g.b.WriteString(`</wps:spPr>`)
+	}
+	if g.chance(2) {
+		g.b.WriteString(`<wps:style>`)
+		for _, ref := range []string{"a:lnRef", "a:fillRef", "a:effectRef", "a:fontRef"} {
+			if g.chance(3) {
+				continue
+			}
+			g.b.WriteString(`<` + ref + ` idx="` + g.pick("0", "1", "2", "3", "-99999999999", "77", "minor") + `">`)
+			if !g.chance(5) {
+				g.colorEl()
+			}
+			g.b.WriteString(`</` + ref + `>`)
+		}
+		g.b.WriteString(`</wps:style>`)
+	}
+	switch g.rng.IntN(4) {
+	case 0, 1:
+		g.b.WriteString(`<wps:txbx`)
+		if g.chance(2) {
+			g.b.WriteString(` id="` + g.pick("1", "2", " 3 ", "x") + `"`)
+		}
+		g.b.WriteString(`><w:txbxContent>`)
+		if g.txbxDepth < 5 {
+			g.txbxDepth++
+			g.blocks(2, 1+g.rng.IntN(2))
+			g.txbxDepth--
+		}
+		g.b.WriteString(`</w:txbxContent></wps:txbx>`)
+	case 2:
+		g.b.WriteString(`<wps:linkedTxbx id="` + g.pick("1", "2", "x") + `" seq="` + g.pick("1", "2", "0", "1") + `"/>`)
+	}
+	if g.chance(2) {
+		g.b.WriteString(`<wps:bodyPr`)
+		for _, a := range []struct{ n, v string }{{"vert", g.pick("horz", "vert", "vert270", "wordArtVert", "eaVert", "x")}, {"anchor", g.pick("t", "ctr", "b", "dist", "just")},
+			{"lIns", g.pick("91440", "0", "-5", "99999999999", "x")}, {"tIns", g.pick("45720", "100")}, {"rIns", g.pick("91440", "1")}, {"bIns", g.pick("45720")}} {
+			if g.chance(2) {
+				g.b.WriteString(` ` + a.n + `="` + a.v + `"`)
+			}
+		}
+		g.b.WriteString(`>`)
+		if g.chance(3) {
+			g.b.WriteString(`<a:prstTxWarp prst="` + g.pick("textArchUp", "textWave1", "textNoShape", "bogus") + `"><a:avLst><a:gd name="` + g.pick("adj", "adj1", "", "a b", strings.Repeat("n", 20)) + `" fmla="` + g.pick("val 10800000", "val -999999999999", "val x") + `"/><a:gd name="adj" fmla="val 5"/>`)
+			for i := range g.rng.IntN(12) {
+				g.b.WriteString(`<a:gd name="g` + strconv.Itoa(i) + `" fmla="val ` + strconv.Itoa(i) + `"/>`)
+			}
+			g.b.WriteString(`</a:avLst></a:prstTxWarp>`)
+		}
+		if g.chance(3) {
+			g.b.WriteString(`<a:spAutoFit/>`)
+		}
+		g.b.WriteString(`</wps:bodyPr>`)
+	}
+	g.b.WriteString(`</wps:wsp>`)
 }
 
 // sdtOpen starts a content control (w:sdt with random properties and an end-properties
@@ -1256,7 +1453,33 @@ func (g *docxGen) special() {
 		}
 		return ""
 	}
-	switch g.rng.IntN(3) {
+	switch g.rng.IntN(5) {
+	case 3:
+		// Linked text boxes: maybe a first box (seq 0, holding the text), repeats, gaps.
+		first := g.chance(2)
+		id := g.pick("5", "6")
+		var seqs []string
+		for range 2 + g.rng.IntN(3) {
+			seqs = append(seqs, g.pick("1", "2", "3", "1"))
+		}
+		g.b.WriteString(`<w:p>`)
+		if first {
+			g.b.WriteString(`<w:r><w:drawing><wp:inline><wp:extent cx="1" cy="1"/><a:graphic><a:graphicData uri="x"><wps:wsp><wps:txbx id="` + id + `"><w:txbxContent><w:p><w:r><w:t>chain</w:t></w:r></w:p></w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`)
+		}
+		for _, q := range seqs {
+			g.b.WriteString(`<w:r><w:drawing><wp:inline><wp:extent cx="1" cy="1"/><a:graphic><a:graphicData uri="x"><wps:wsp><wps:linkedTxbx id="` + id + `" seq="` + q + `"/></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`)
+		}
+		g.b.WriteString(`</w:p>`)
+	case 4:
+		// Text boxes nested deeper than the reader follows.
+		depth := 3 + g.rng.IntN(4)
+		for range depth {
+			g.b.WriteString(`<w:p><w:r><w:drawing><wp:inline><wp:extent cx="1" cy="1"/><a:graphic><a:graphicData uri="x"><wps:wsp><wps:txbx><w:txbxContent>`)
+		}
+		g.b.WriteString(`<w:p><w:r><w:t>deep</w:t></w:r></w:p>`)
+		for range depth {
+			g.b.WriteString(`</w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`)
+		}
 	case 0:
 		name := g.pick("move1", "move2")
 		for _, side := range []string{"From", "To"} {

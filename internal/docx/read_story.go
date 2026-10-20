@@ -162,6 +162,8 @@ type storyCtx struct {
 	ignoredBegins int
 	pending       []doc.Object
 	inHF          bool
+	// storyDepth is the text-box nesting depth.
+	storyDepth int
 }
 
 // sink is the field that buffers content now: the innermost one that isn't a range field,
@@ -800,7 +802,7 @@ func (r *reader) readRunChild(sc *storyCtx, pb *paraBuilder, k *El, props doc.Ch
 			r.endField(sc, pb)
 		}
 	case "w:drawing":
-		if o, ok := r.readDrawing(k, rels); ok {
+		if o, ok := r.readDrawing(sc, k, rels); ok {
 			r.emitObj(sc, pb, o, props)
 		}
 	case "w:pict":
