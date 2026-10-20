@@ -1,8 +1,8 @@
 # WordCraft: Rust → Go migration plan
 
-> **Status:** approved 2026-10-20; M0 done; M1 in progress (`geom` verified) · **Created:** 2026-10-20 · **Rust baseline:** `9b4b948` (computernut43/wordcraft `main`)
+> **Status:** approved 2026-10-20; M0 done; M1 in progress (`geom` verified; document model typed and serde-exact, M1d.1–2; engine core and CLI M1b; DOCX XML and package M1c.1–2) · **Created:** 2026-10-20 · **Rust baseline:** `9b4b948` (computernut43/wordcraft `main`)
 >
-> This plan covers Phase 2 of the migration (planning). No Go code exists yet, and no Rust code is to be removed until
+> This plan covers the migration. Go code lands component by component; no Rust code is to be removed until
 > the matching Go code builds, passes its tests and has been reviewed (§9).
 
 ## 1. Goal and decisions so far
@@ -96,7 +96,7 @@ Sizes are lines including in-file tests, at the baseline. The test count is the 
 | `fonts` | 5.7k | Font DB (bundled OFL and system fonts), metrics, outlines, HarfRust shaping, Word font substitution, OpenType MATH, WOFF/WOFF2 | `internal/fonts` | `go-text/typesetting` for parsing and shaping; port the substitution table; **write** a MATH table parser and a WOFF2 decoder | High |
 | `proof` | 13.6k | Spelling, grammar, hyphenation per language; Hunspell-style affix engine; Liang patterns | `internal/proof` | Straight port, pure logic plus data in `assets/` | Medium |
 | `layout` | 28.7k | Shaping, line breaking, tabs, lists, tables, pagination, headers/footers, notes, floats and wrap, math, vertical text, kinsoku, hit testing, incremental relayout | `internal/layout` | Port, using go-text `segmenter` (UAX #14/#29) and `bidi` (UAX #9) | **Very high** |
-| `docx` | 32.7k | OOXML read/write (Transitional and Strict), Flat OPC, Word 2003 XML, agile encryption, charts, SmartArt, glossary, content controls, passthrough | `internal/docx` | Port. Read with `encoding/xml` token streams; write with a hand-written XML writer (exact prefixes and order) | High (size, fidelity) |
+| `docx` | 32.7k | OOXML read/write (Transitional and Strict), Flat OPC, Word 2003 XML, agile encryption, charts, SmartArt, glossary, content controls, passthrough | `internal/docx` | Port. Read with our own bounded tokenizer that splits, resolves and fails exactly as the baseline's quick-xml 0.41 does (`encoding/xml` normalizes line ends in text and doesn't normalize attribute whitespace, so its trees differ from Rust's); write with a hand-written XML writer (exact prefixes and order) | High (size, fidelity) |
 | `docbin` | 7.7k | `.doc` reader: FIB, piece table, FKPs, SPRMs, stylesheet, lists, tables, notes, OfficeArt, XOR/RC4 decryption | `internal/docbin` | Port over `internal/cfb` | Medium |
 | `formats` | 19.7k | TXT, Markdown, HTML, RTF, ODT, LaTeX, MathML; spreadsheets for mail merge (`.xlsx`, `.ods`, `.xls`) | `internal/formats` | Port; `x/text/encoding` for code pages; port chardetng's detector (Apache-2.0/MIT, attributed) | Medium |
 | `metafile` | 3.2k | WMF/EMF → paths | `internal/metafile` | Straight port | Medium |
@@ -192,9 +192,9 @@ for `verified` rows.
 | Feature | Rust source | Status |
 |---|---|---|
 | Units, rects, measurement parsing | `crates/geom` | **verified**: all 11 Rust tests ported; 82,706 generated cases compared with the Rust crate bit for bit (`TestMatchesRust`): 82,611 identical, 95 rotations whose sine/cosine differ by one ULP (Rust calls the platform's `sinf`/`cosf`) with everything computed from them exact; fuzzed. Signed zeros of `min`/`max` follow Rust on x86-64 |
-| Document, paragraphs, runs, character/paragraph properties | `crates/doc/src/{lib,para,props}.rs` | not started |
+| Document, paragraphs, runs, character/paragraph properties | `crates/doc/src/{lib,para,props}.rs` | in progress (M1d.1): read and written with craft-libs `serdejson` exactly as serde reads and writes them. **Typed and verified**: every type of `props.rs` (`CharProps`, `ParaProps`, `TableProps`, `RowProps`, `CellProps` and everything in them, with `CharProps` overlay/minus/unlinked/cleared/formatting/without_symbol/shown_font and `ParaProps`/`Borders` overlay), the run text effects of `wordart.rs`/`effects.rs` (data and overlay), `Anchor`/`FloatAlign`, `CoreProps`, `NoteSeparators`, media, `Settings` (with `Zoom`, `PagePicture`, `Watermark`, `MathProps`), `Part`/`TextBody`, `Comment`, `Revision`, `Source`, `CustomProp`, `BuildingBlock`, `Paragraph`, `Run`, `Block`, `Document`: 109,355 generated inputs (valid values of every field, the other forms serde takes, single and double mistakes, the same values inside a block where serde reads them from Content, documents) give the same output byte for byte, or both refuse (`TestPropsMatchRust`, `testdata/rust-oracle` `props`); 35 of 35 planted bugs caught (34 by it, one by a ported unit test); the props.rs unit tests ported; fuzzed (`FuzzUnmarshal`). Paragraph edits (insert, delete, format, normalize, props at an offset) **verified**: 30,000 random edits identical to `crates/doc` (`TestMatchesRust`). **Not typed yet** (`Raw`: kept as read, checked only as JSON, so a non-canonical value there isn't normalised and a missing one isn't filled with Rust's default): tables, inline objects, a paragraph's section, and the document's `styles` and `numbering`; a table given as a sequence is refused. Empty parts are now repaired as Rust repairs them (a paragraph added). Not ported: `TextFill`/`TextEffects` sanitizing, WordArt styles, text warps |
 | Tables (merges, row/cell props, nested) | `crates/doc/src/table.rs` | not started |
-| Sections, columns, page setup, line numbers, doc grid | `crates/doc/src/section.rs` | not started |
+| Sections, columns, page setup, line numbers, doc grid | `crates/doc/src/section.rs`, `cjk_numbers.rs` | **verified** (M1d.2): every type, `SectionProps` measurements (text area, grid pitches, lines per page, characters per line, column boxes), landscape, absorb, `DocGrid::char_space_for`, and all 62 number formats (`NumFormat::format`, with the Chinese, Japanese and Korean counting systems), compared with Rust in `TestPropsMatchRust` (each format over 0–130 and every system's edges, plus random numbers); section.rs and cjk_numbers.rs unit tests ported |
 | Styles, style resolution, themes | `crates/doc/src/{styles,resolve}.rs` | not started |
 | Numbering and lists | `crates/doc/src/numbering.rs` | not started |
 | Fields | `crates/doc/src/fields.rs` | not started |
@@ -204,12 +204,12 @@ for `verified` rows.
 | Charts, SmartArt, WordArt, shapes, connectors, freeforms, ink | `crates/doc/src/{chart,smart_art,wordart,connector,freeform,graphic}.rs` | not started |
 | Content controls, legacy forms | `crates/doc/src/{control,legacy_form}.rs` | not started |
 | Edit primitives, bidi helpers, clusters | `crates/doc/src/{edit,bidi,cluster}.rs` | not started |
-| JSON document format (`.json`, `.wcraft.json`) wire-compatible with Rust | `serde` derives in `crates/doc` | not started |
+| JSON document format (`.json`, `.wcraft.json`) wire-compatible with Rust | `serde` derives in `crates/doc` | **verified** for the documents tried: the Rust sample (and the sample saved as DOCX and reopened) reads and writes back **byte for byte** as `serde_json::to_vec_pretty` writes it, and Rust reads Go's output as it reads its own (`TestRustDocumentsRoundTrip`); typed parts verified as above. Unknown fields are dropped and duplicate fields refused, as serde does |
 
 ### File formats (open = `OPEN_EXTS`, save = `SAVE_EXTS` in `crates/engine/src/io.rs`)
 | Format | Open | Save | Rust source | Status |
 |---|---|---|---|---|
-| DOCX/DOCM/DOTX/DOTM (Transitional + Strict) | ✓ | ✓ | `crates/docx` | not started |
+| DOCX/DOCM/DOTX/DOTM (Transitional + Strict) | ✓ | ✓ | `crates/docx` | in progress (M1c). XML tree (`crates/docx/src/xml.rs` with quick-xml 0.41) **verified**: all 6 Rust tests ported, and 400,000 generated inputs (well-formed, malformed, mutated, UTF-16, BOMs, DTDs, namespace edge cases) give the same tree or the same failure as the Rust code itself (`TestXMLMatchesRust`, 200,000 in CI; mutation-checked); fuzzed (10.5M execs). Error wording differs from quick-xml's. Kept as in Rust: `ToXML` writes names as read, so a hostile name can make re-emitted kept content invalid XML. Package access (`package.rs` with zip 3.0 and flate2 1.1.10/zlib-rs) **verified** for the ported parts (bounded zip reading, relationships, content types, `Resolve`/`Relative`, `ZipEntries`): our own zip reader (`zipread.go`) finds, opens and refuses archives as the zip crate does, because `archive/zip` disagrees on damaged ones; 30,000 generated archives (stored/deflated, ZIP64, prepended data, comments, repeated and CP437 names, NTFS/timestamp/Unicode/AES extra fields, encryption flags, bad CRCs, truncation, byte damage, tight size limits) give the same parts, relationships, content types and failures (`TestPackageMatchesRust`, also in CI; of 16 deliberate bugs, 14 are caught and 2 change no outcome); Rust tests ported; fuzzed (7.6M execs). Not ported yet: `EmbeddedManifest`, the glossary fingerprint and the passthrough keys (with the reader parts that use them). `ZipEntries` writes with `archive/zip` at its default deflate level, so bytes differ from Rust's output; what a reader gets back is the same |
 | Encrypted DOCX (agile) | ✓ | ✓ | `crates/docx/src/crypt.rs` | not started |
 | Flat OPC XML, Word 2003 XML | ✓ | ✓ | `crates/docx/src/{flat,wordml2003*}.rs` | not started |
 | DOC/DOT (Word 97–2003), XOR/RC4 encrypted | ✓ | | `crates/docbin` | not started |
@@ -219,7 +219,7 @@ for `verified` rows.
 | RTF | ✓ | ✓ | `crates/formats/src/rtf.rs` | not started |
 | ODT | ✓ | ✓ | `crates/formats/src/odt.rs` | not started |
 | LaTeX | ✓ | ✓ | `crates/formats/src/latex.rs` | not started |
-| JSON (WordCraft model) | ✓ | ✓ | `crates/engine/src/io.rs` | not started |
+| JSON (WordCraft model) | ✓ | ✓ | `crates/engine/src/io.rs` | in progress (M1b): open (runs repaired, a paragraph to type in) and save (save metadata stamped, written atomically with craft-libs `atomic`). Documents Rust would repair or refresh in ways not ported yet (empty table cells or parts, unlocked DATE/TIME fields) are refused |
 | PDF | | ✓ | `crates/pdf` | not started |
 | PNG (page render) | | ✓ | `crates/render` | not started |
 | Mail-merge sources: CSV, XLSX/XLSM, ODS, XLS | ✓ | | `crates/formats/src/sheet*` (the XLS writer is a test fixture) | not started |
@@ -247,16 +247,16 @@ for `verified` rows.
 ### Engine and automation
 | Feature | Rust source | Status |
 |---|---|---|
-| `Session`, selection, undo/redo, Repeat, macro recording | `crates/engine/src/session.rs` | not started |
-| Command registry framework (`CommandSpec`, `enabled`, `mutates`) | `crates/engine/src/lib.rs` | not started |
-| Restrict Editing / protection checks | `crates/engine/src/cmd/protect.rs` | not started |
+| `Session`, selection, undo/redo, Repeat, macro recording | `crates/engine/src/session.rs` | in progress (M1b): `Session`, selection, undo/redo (500 steps, typing coalesced, a caret move ends the group), a failed or panicking command restores the session. Repeat and macro recording not started |
+| Command registry framework (`CommandSpec`, `enabled`, `mutates`) | `crates/engine/src/lib.rs` | in progress (M1b): `CommandSpec`, `Registry`, `Session.Run`. Ported commands: `text.insert`, `format.bold`, `select.text`, `select.range`, `select.collapse`, `edit.undo`, `edit.redo`, each covering the cases its doc comment lists and refusing the rest as not ported. **Verified** on those cases: random scripts run through both CLIs print the same results and errors and save the same documents (`TestRunMatchesRust`; 3,000 scripts and 11,882 steps checked locally, 1,000 in CI; six deliberate bugs, five caught by it and the sixth by a unit test); `TestHostileParamsNeverPanic`; `FuzzCommands` |
+| Restrict Editing / protection checks | `crates/engine/src/cmd/protect.rs` | not started (M1b refuses editing commands on protected documents) |
 | Commands by namespace (633 total, 36 namespaces): `para` 50, `table` 48, `insert` 44, `format` 39, `view` 36, `review` 35, `edit` 31, `file` 28, `outline` 26, `references` 25, `text` 22, `equation` 20, `mailings` 19, `layout` 18, `styles` 16, `draw` 16, `developer` 16, `caret` 16, `arrange` 15, `select` 14, `picture` 14, `tools` 11, `design` 11, `shape` 9, `smartArt` 8, `fields` 8, `readAloud` 7, `document` 6, `chart` 5, `wordArt` 4, `font` 4, `canvas` 4, `list` 3, `hf` 3, `object` 1, `link` 1 | `crates/engine/src/cmd/*.rs` | not started (tracked per namespace in `docs/go-port-commands.md`, created in M4) |
 | Word feature catalog and parity floor | `crates/engine/src/catalog.rs` | not started |
 | Typing parity (Enter, Backspace, Tab, AutoCorrect, AutoFormat) | `crates/engine/src/tests_typing.rs`, `docs/typing-parity.md` | not started |
 | Samples, templates | `crates/engine/src/sample.rs`, `cmd/templates.rs` | not started |
 | Crash recovery, safe save | `crates/engine/src/{recovery,io/safe_save}.rs` | not started |
 | Proofing per `ProofLang` (depth varies by language: e.g. English and Polish have spelling, grammar and hyphenation; Bulgarian has hyphenation only; Vietnamese is language detection only) | `crates/proof` | not started |
-| CLI | `apps/wordcraft-cli` | not started |
+| CLI | `apps/wordcraft-cli` | in progress (M1b): `convert IN OUT`, `run --file F --cmd ID[=JSON]… --print --save OUT` and `commands` for JSON documents, with Rust's output and error format. Other subcommands and options refused as not ported |
 | MCP server (headless and bridged) | `crates/mcp` | not started |
 | Control channel + keys | `crates/ui-egui/src/control.rs`, `crates/control-key` | not started |
 | Zotero integration | `crates/zotero` | not started |
@@ -275,6 +275,7 @@ for `verified` rows.
 | Printing | `crates/ui-egui/src/printing.rs`, craft-print | not started |
 | Read Aloud | `crates/engine/src/speech.rs`, `crates/ui-egui/src/read_aloud.rs` | not started |
 | macOS, Windows, Linux, FreeBSD desktop | `apps/wordcraft` | not started |
+| Linux builds of the Go command line (x86-64, ARM64; static, no cgo) | — (Go only) | done: every CI run builds `wordcraft-cli` for Linux, smoke-tests it and keeps it as a workflow artifact (`linux-build` job) |
 | Browser (wasm), IndexedDB storage | `apps/wordcraft-web` | not started |
 | Packaging (DMG, MSI, AppImage, deb/rpm, Flatpak, FreeBSD) | `packaging/`, `.github/workflows/release.yml` | not started |
 
@@ -397,6 +398,13 @@ strongest. Layout, render and UI come later, after the model is proven.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | M1d.2: sections (with all number formats and the CJK counting systems), settings, parts, comments, revisions, sources, custom properties and glossary typed and verified against `crates/doc` |
+| 2026-10-20 | minor | M1d.1: `internal/doc` typed with craft-libs `serdejson` (all of `props.rs`, run text effects, core properties, paragraphs, runs, blocks, documents); `Extra` replaced by `Raw` for the parts not typed yet; JSON output byte for byte as Rust's; verified by a new props reference program; doc oracle pinned to the baseline's serde and serde_json |
+| 2026-10-20 | minor | Linux builds of `wordcraft-cli` in CI |
+| 2026-10-20 | minor | M1c.2: `internal/docx` package access with a zip reader matching the zip crate, verified against `package.rs` |
+| 2026-10-20 | minor | M1c.1: `internal/docx` XML tree, verified against `crates/docx/src/xml.rs` |
+| 2026-10-20 | minor | M1b: `internal/engine` core (session, undo, registry, seven commands, JSON open/save) and `cmd/wordcraft-cli`, verified against the Rust CLI by random scripts |
+| 2026-10-20 | minor | M1a: `internal/doc` model with lossless JSON and paragraph edits, verified against Rust |
 | 2026-10-20 | minor | M1: `internal/geom` ported and verified against Rust |
 | 2026-10-20 | minor | M0 landed: Go module, `tools/ci` (shared gates from craft-libs + layers and assets ported from xtask), `internal/rustref` (checked against the real Rust CLI), Go workflow, agent instructions; craft-libs brought into scope; layer table corrected to the Rust gate's |
 | 2026-10-20 | major | First version: audit findings, owner decisions, library checks, checklist and milestones |

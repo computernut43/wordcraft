@@ -162,6 +162,30 @@ func environment(dir string) []string {
 // returns its standard output. A non-zero exit, a timeout or too much output is an error that
 // includes the start of its standard error.
 func (c *CLI) Run(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	res, err := c.Exec(ctx, dir, args...)
+	if err != nil {
+		return nil, err
+	}
+	if res.Code != 0 {
+		msg := string(res.Stderr)
+		if len(msg) > 4096 {
+			msg = msg[:4096] + "…"
+		}
+		return nil, fmt.Errorf("reference %v: exit status %d\n%s", args, res.Code, strings.TrimSpace(msg))
+	}
+	return res.Stdout, nil
+}
+
+// Result is a finished reference run.
+type Result struct {
+	Stdout, Stderr []byte
+	Code           int // exit status
+}
+
+// Exec runs the reference like Run but returns a non-zero exit as a Result, for tests that compare
+// failures too. The error is for runs that didn't finish: not started, timed out, killed, or too
+// much output.
+func (c *CLI) Exec(ctx context.Context, dir string, args ...string) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout())
 	defer cancel()
 	cmd := exec.CommandContext(ctx, c.Path, args...)
@@ -170,17 +194,18 @@ func (c *CLI) Run(ctx context.Context, dir string, args ...string) ([]byte, erro
 	stdout := &cappedBuffer{max: c.maxOutput()}
 	stderr := &cappedBuffer{max: c.maxOutput()}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
-	if err := cmd.Run(); err != nil {
-		msg := stderr.buf.String()
-		if len(msg) > 4096 {
-			msg = msg[:4096] + "…"
-		}
-		if ctx.Err() != nil {
-			err = fmt.Errorf("%w (after %s)", ctx.Err(), c.timeout())
-		}
-		return nil, fmt.Errorf("reference %v: %w\n%s", args, err, strings.TrimSpace(msg))
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return Result{}, fmt.Errorf("reference %v: %w (after %s)", args, ctx.Err(), c.timeout())
 	}
-	return stdout.buf.Bytes(), nil
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.Exited() {
+		return Result{Stdout: stdout.buf.Bytes(), Stderr: stderr.buf.Bytes(), Code: exit.ExitCode()}, nil
+	}
+	if err != nil {
+		return Result{}, fmt.Errorf("reference %v: %w", args, err)
+	}
+	return Result{Stdout: stdout.buf.Bytes(), Stderr: stderr.buf.Bytes()}, nil
 }
 
 // readCapped reads a file the reference wrote, failing if it is larger than MaxOutput.
