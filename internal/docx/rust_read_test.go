@@ -1406,8 +1406,16 @@ func (g *docxGen) custGeom() {
 
 // colorEl writes a DrawingML colour element with random modifiers.
 func (g *docxGen) colorEl() {
-	name := g.pick("a:srgbClr", "a:schemeClr", "a:sysClr", "a:prstClr", "a:hslClr", "a:srgbClr")
+	name := g.pick("a:srgbClr", "a:schemeClr", "a:sysClr", "a:prstClr", "a:hslClr", "a:srgbClr", "a:scrgbClr")
 	switch name {
+	case "a:scrgbClr":
+		g.b.WriteString(`<a:scrgbClr`)
+		for _, ch := range []string{"r", "g", "b"} {
+			if !g.chance(8) {
+				g.b.WriteString(` ` + ch + `="` + g.pick(strconv.Itoa(g.rng.IntN(100_001)), strconv.Itoa(g.rng.IntN(400)), "0", "100000", "-5", "200000", "x", "99999999999999", "50%", "21404.5") + `"`)
+			}
+		}
+		g.b.WriteString(`>`)
 	case "a:srgbClr":
 		g.b.WriteString(`<a:srgbClr val="` + g.pick(colorPool...) + `">`)
 	case "a:schemeClr":
@@ -1557,9 +1565,6 @@ func (g *docxGen) wsp() {
 		}
 		if g.chance(4) {
 			g.custGeom()
-		}
-		if g.chance(g.exotic) {
-			g.b.WriteString(`<a:solidFill><a:scrgbClr r="50000" g="0" b="0"/></a:solidFill>`)
 		}
 		g.b.WriteString(`</wps:spPr>`)
 	}

@@ -1,10 +1,12 @@
 package docx
 
-// Colour arithmetic for theme tints and shades (Rust crates/docx/src/read/drawing_color.rs; only
-// what the ported readers use so far).
+// DrawingML colours and the arithmetic for theme tints and shades (Rust
+// crates/docx/src/read/drawing_color.rs).
 
 import (
 	"math"
+
+	"github.com/computernut43/craft-libs/rustcompat"
 
 	"github.com/computernut43/wordcraft/internal/doc"
 )
@@ -121,8 +123,7 @@ func isColorEl(e *El) bool {
 }
 
 // drawingColor is a colour element (a:srgbClr, a:schemeClr, a:sysClr…), or the one inside e,
-// with its lumMod / lumOff / tint / shade applied in document order. a:scrgbClr needs glibc's pow
-// to match Rust (not ported): callers refuse files that use it, and here it gives no colour.
+// with its lumMod / lumOff / tint / shade applied in document order.
 func drawingColor(e *El, theme []doc.RGB) (doc.RGB, bool) {
 	c := e
 	if !isColorEl(e) {
@@ -177,6 +178,8 @@ func drawingColor(e *El, theme []doc.RGB) (doc.RGB, bool) {
 		if base, ok = presetColor(v); !ok {
 			return doc.RGB{}, false
 		}
+	case "a:scrgbClr":
+		base = doc.RGB{R: linearToSRGB(c, "r"), G: linearToSRGB(c, "g"), B: linearToSRGB(c, "b")}
 	case "a:hslClr":
 		v := func(n string) float64 {
 			if s, ok := c.Attr(n); ok {
@@ -348,4 +351,30 @@ func schemeSlot(name string) (int, bool) {
 		return 11, true
 	}
 	return 0, false
+}
+
+// linearToSRGB is channel n of an a:scrgbClr (linear, 0–100 000) as an sRGB byte. Go's math.Pow
+// differs from glibc's pow (which Rust uses) in the last bit for some arguments, but there are
+// only 100 001 inputs: TestLinearToSRGBMatchesGlibc checks every one gives glibc's byte.
+func linearToSRGB(c *El, n string) uint8 {
+	l := 0.0
+	if v, ok := c.Attr(n); ok {
+		if k, ok := intOf(v); ok {
+			l = rustcompat.Clamp(float64(k)/100_000, 0, 1)
+		}
+	}
+	return srgbByte(l)
+}
+
+// srgbByte is linear light l (0–1) as an sRGB byte (IEC 61966-2-1).
+func srgbByte(l float64) uint8 {
+	var s float64
+	if l <= 0.003_130_8 {
+		s = l * 12.92
+	} else {
+		// Each product is rounded on its own (float64(…)): Go may otherwise fuse a multiply and
+		// an add, which Rust never does.
+		s = float64(1.055*math.Pow(l, 1.0/2.4)) - 0.055
+	}
+	return uint8(rustcompat.Clamp(math.Round(float64(s*255)), 0, 255))
 }
