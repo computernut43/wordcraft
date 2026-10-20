@@ -249,7 +249,7 @@ func goRead(b []byte) string {
 
 const (
 	nsW     = `xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"`
-	nsDocs  = nsW + ` xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"`
+	nsDocs  = nsW + ` xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"`
 	relBase = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
 )
 
@@ -1138,25 +1138,18 @@ func (g *docxGen) drawing() {
 		g.b.WriteString(`</a:graphicData>`)
 	case g.chance(10):
 		g.b.WriteString(`<a:graphicData uri="x"/>`)
+	case g.chance(6):
+		g.b.WriteString(`<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup">`)
+		g.group("wpg:wgp", 0)
+		g.b.WriteString(`</a:graphicData>`)
+	case g.chance(6):
+		g.b.WriteString(`<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas">`)
+		g.canvas()
+		g.b.WriteString(`</a:graphicData>`)
 	default:
-		g.b.WriteString(`<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="p"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill>`)
-		id := "rIdMissing"
-		if len(g.images) > 0 && !g.chance(8) {
-			id = g.pick(g.images...)
-		}
-		if !g.chance(10) {
-			g.b.WriteString(`<a:blip r:embed="` + id + `"/>`)
-		} else {
-			g.b.WriteString(`<a:blip/>`)
-		}
-		if g.chance(3) {
-			g.b.WriteString(`<a:srcRect l="` + g.pick("0", "10000", "-5", "150000", "x", "33333") + `" t="` + g.pick("0", "500") + `" r="` + g.pick("25000", "") + `" b="7"/>`)
-		}
-		g.b.WriteString(`<a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr>`)
-		if g.chance(2) {
-			g.b.WriteString(`<a:xfrm rot="` + g.pick("0", "5400000", "-5400000", "2700000", "21600000", "99999999999", "x", "1234567", "-1234567", "-21599999") + `" flipH="` + g.pick(onOffPool...) + `" flipV="` + g.pick("0", "1") + `"><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>`)
-		}
-		g.b.WriteString(`<a:prstGeom prst="rect"/></pic:spPr></pic:pic></a:graphicData>`)
+		g.b.WriteString(`<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">`)
+		g.pic()
+		g.b.WriteString(`</a:graphicData>`)
 	}
 	g.b.WriteString(`</a:graphic>`)
 	if anchored {
@@ -1165,6 +1158,179 @@ func (g *docxGen) drawing() {
 		g.close("wp:inline")
 	}
 	g.b.WriteString(`</w:drawing>`)
+}
+
+// pic writes a picture (pic:pic) with random media, crop, rotation and frame.
+func (g *docxGen) pic() {
+	g.b.WriteString(`<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="p"`)
+	g.nvAttrs()
+	g.b.WriteString(`/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill>`)
+	id := "rIdMissing"
+	if len(g.images) > 0 && !g.chance(8) {
+		id = g.pick(g.images...)
+	}
+	if !g.chance(10) {
+		g.b.WriteString(`<a:blip r:embed="` + id + `"/>`)
+	} else {
+		g.b.WriteString(`<a:blip/>`)
+	}
+	if g.chance(3) {
+		g.b.WriteString(`<a:srcRect l="` + g.pick("0", "10000", "-5", "150000", "x", "33333") + `" t="` + g.pick("0", "500") + `" r="` + g.pick("25000", "") + `" b="7"/>`)
+	}
+	g.b.WriteString(`<a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr>`)
+	if g.chance(2) {
+		g.b.WriteString(`<a:xfrm rot="` + g.pick("0", "5400000", "-5400000", "2700000", "21600000", "99999999999", "x", "1234567", "-1234567", "-21599999") + `" flipH="` + g.pick(onOffPool...) + `" flipV="` + g.pick("0", "1") + `">`)
+		g.offExt(false)
+		g.b.WriteString(`</a:xfrm>`)
+	}
+	g.b.WriteString(`<a:prstGeom prst="rect"/></pic:spPr></pic:pic>`)
+}
+
+// emuPool are DrawingML coordinates (EMU).
+var emuPool = []string{"9999999999999999", "-9999999999999999", "0", "914400", "457200", "-457200", "12700", "1", "99999999999", "-99999999999", "x", "1in", "254000", "3175", "635"}
+
+// offExt writes a:off and a:ext, and for a group a:chOff and a:chExt, each sometimes missing.
+func (g *docxGen) offExt(group bool) {
+	names := [][3]string{{"a:off", "x", "y"}, {"a:ext", "cx", "cy"}}
+	if group {
+		names = append(names, [3]string{"a:chOff", "x", "y"}, [3]string{"a:chExt", "cx", "cy"})
+	}
+	for _, n := range names {
+		if g.chance(5) {
+			continue
+		}
+		g.b.WriteString(`<` + n[0])
+		for _, a := range n[1:] {
+			if !g.chance(8) {
+				g.b.WriteString(` ` + a + `="` + g.pick(emuPool...) + `"`)
+			}
+		}
+		g.b.WriteString(`/>`)
+	}
+}
+
+// nvAttrs writes the alternative-text attributes of a cNvPr.
+func (g *docxGen) nvAttrs() {
+	for _, a := range []string{"descr", "title"} {
+		if g.chance(3) {
+			g.b.WriteString(` ` + a + `="` + xmlEsc(g.pick("A dog", "", "line\nbreak")) + `"`)
+		}
+	}
+	if g.chance(4) {
+		g.b.WriteString(` hidden="` + g.pick(onOffPool...) + `"`)
+	}
+}
+
+// group writes a group (wpg:wgp, or wpg:grpSp nested in one) with random frame and members.
+func (g *docxGen) group(name string, depth int) {
+	g.b.WriteString(`<` + name + `><wpg:cNvGrpSpPr/>`)
+	if !g.chance(6) {
+		g.b.WriteString(`<wpg:grpSpPr>`)
+		if !g.chance(5) {
+			g.b.WriteString(`<a:xfrm`)
+			if g.chance(3) {
+				g.b.WriteString(` rot="` + g.pick("5400000", "-60000", "x") + `" flipH="` + g.pick("1", "0") + `"`)
+			}
+			g.b.WriteString(`>`)
+			g.offExt(true)
+			g.b.WriteString(`</a:xfrm>`)
+		}
+		g.b.WriteString(`</wpg:grpSpPr>`)
+	}
+	g.members(depth)
+	g.b.WriteString(`</` + name + `>`)
+}
+
+// members writes a group's or canvas's members: pictures, shapes, groups and things skipped.
+func (g *docxGen) members(depth int) {
+	if depth == 0 && g.chance(20) {
+		// Nested deeper than a group is read.
+		n := 7 + g.rng.IntN(4)
+		for range n {
+			g.b.WriteString(`<wpg:grpSp><wpg:grpSpPr><a:xfrm><a:off x="12700" y="0"/><a:ext cx="12700" cy="12700"/></a:xfrm></wpg:grpSpPr><wps:wsp/>`)
+		}
+		g.b.WriteString(`<wps:wsp/>`)
+		for range n {
+			g.b.WriteString(`</wpg:grpSp>`)
+		}
+	}
+	if g.chance(60) {
+		// More than a group keeps.
+		for range 1003 {
+			g.b.WriteString(`<wps:wsp/>`)
+		}
+		return
+	}
+	for range g.rng.IntN(5) {
+		switch g.rng.IntN(9) {
+		case 0, 1:
+			g.pic()
+		case 2, 3, 4:
+			g.wsp()
+		case 5:
+			if depth < 10 {
+				g.group(g.pick("wpg:grpSp", "wpg:grpSp", "wpg:wgp"), depth+1)
+			}
+		case 6:
+			g.b.WriteString(`<mc:AlternateContent><mc:Choice Requires="` + g.pick("wps", "wpg", "bogus", "wps w14") + `">`)
+			if !g.chance(5) {
+				g.wsp()
+			}
+			g.b.WriteString(`</mc:Choice>`)
+			if g.chance(2) {
+				g.b.WriteString(`<mc:Fallback>`)
+				if g.chance(2) {
+					g.pic()
+				}
+				g.b.WriteString(`</mc:Fallback>`)
+			}
+			g.b.WriteString(`</mc:AlternateContent>`)
+		case 7:
+			if g.chance(g.exotic / 4) {
+				g.b.WriteString(g.pick(`<w14:contentPart r:id="rId1"/>`, `<mc:AlternateContent><mc:Choice Requires="w14"><w14:contentPart r:id="rId1"/></mc:Choice><mc:Fallback/></mc:AlternateContent>`))
+			}
+		default:
+			g.b.WriteString(g.pick(`<wpg:cNvGrpSpPr/>`, `<a:junk/>`, `<wpc:bg/>`))
+		}
+	}
+}
+
+// canvas writes a drawing canvas (wpc:wpc) with random background, outline, spin and members.
+func (g *docxGen) canvas() {
+	g.b.WriteString(`<wpc:wpc>`)
+	solid := func() {
+		switch g.rng.IntN(4) {
+		case 0:
+			g.b.WriteString(`<a:solidFill><a:srgbClr val="` + g.pick(colorPool...) + `"/></a:solidFill>`)
+		case 1:
+			g.b.WriteString(`<a:solidFill><a:schemeClr val="accent1"/></a:solidFill>`)
+		case 2:
+			g.b.WriteString(`<a:noFill/>`)
+		}
+	}
+	if g.chance(2) {
+		g.b.WriteString(`<wpc:bg>`)
+		solid()
+		g.b.WriteString(`</wpc:bg>`)
+	}
+	if g.chance(2) {
+		g.b.WriteString(`<wpc:whole>`)
+		if !g.chance(4) {
+			g.b.WriteString(`<a:ln`)
+			if g.chance(2) {
+				g.b.WriteString(` w="` + g.pick("9525", "0", "-5", "99999999999", "x", "12700000") + `"`)
+			}
+			g.b.WriteString(`>`)
+			solid()
+			g.b.WriteString(`</a:ln>`)
+		}
+		g.b.WriteString(`</wpc:whole>`)
+	}
+	g.members(0)
+	if g.chance(3) {
+		g.b.WriteString(`<wpc:extLst><a:ext uri="` + g.pick(CanvasSpinExt, "urn:wordcraft:CANVAS-xfrm", "{X}") + `"><a:xfrm rot="` + g.pick("5400000", "1234567", "x") + `" flipV="` + g.pick("1", "0") + `"/></a:ext></wpc:extLst>`)
+	}
+	g.b.WriteString(`</wpc:wpc>`)
 }
 
 // colorEl writes a DrawingML colour element with random modifiers.
@@ -1217,6 +1383,11 @@ func (g *docxGen) fillEl() {
 // wsp writes a Word shape: preset, fill, outline, effects, style, text box and connector.
 func (g *docxGen) wsp() {
 	g.b.WriteString(`<wps:wsp>`)
+	if g.chance(3) {
+		g.b.WriteString(`<wps:cNvPr id="` + g.pick("1", "2", "0", "x", "7") + `" name="s"`)
+		g.nvAttrs()
+		g.b.WriteString(`/>`)
+	}
 	if g.chance(4) {
 		g.b.WriteString(`<wps:cNvSpPr txBox="` + g.pick("1", "true", "0") + `"/>`)
 	}
@@ -1232,7 +1403,11 @@ func (g *docxGen) wsp() {
 	if !g.chance(6) {
 		g.b.WriteString(`<wps:spPr>`)
 		if g.chance(2) {
-			g.b.WriteString(`<a:xfrm rot="` + g.pick("0", "5400000", "1234567") + `"><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></a:xfrm>`)
+			// A content part's transform; group members read it when there is no a:xfrm.
+			x := g.pick("a:xfrm", "a:xfrm", "w14:xfrm")
+			g.b.WriteString(`<` + x + ` rot="` + g.pick("0", "5400000", "1234567") + `">`)
+			g.offExt(false)
+			g.b.WriteString(`</` + x + `>`)
 		}
 		if !g.chance(5) {
 			g.b.WriteString(`<a:prstGeom prst="` + g.pick("rect", "roundRect", "ellipse", "triangle", "rtTriangle", "diamond", "line", "straightConnector1", "bentConnector3", "curvedConnector2",

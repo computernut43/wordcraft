@@ -3,6 +3,7 @@ package doc
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -69,12 +70,40 @@ func TestRustDocumentsRoundTrip(t *testing.T) {
 		if err1 != nil || err2 != nil {
 			t.Fatal(err1, err2)
 		}
-		a, err1 := rustref.NormalizeJSON(fromGo)
-		b, err2 := rustref.NormalizeJSON(fromRust)
+		// Each save stamps core.modified with the time, to the second, so two saves may differ.
+		a, err1 := rustref.NormalizeJSON(withoutModified(t, fromGo))
+		b, err2 := rustref.NormalizeJSON(withoutModified(t, fromRust))
 		if err1 != nil || err2 != nil || !bytes.Equal(a, b) {
 			t.Fatalf("%s: Rust reads Go's JSON differently from its own", name)
 		}
 	}
+}
+
+// withoutModified is document JSON without its save time (core.modified).
+func withoutModified(t *testing.T, data []byte) []byte {
+	t.Helper()
+	var v map[string]json.RawMessage
+	if err := json.Unmarshal(data, &v); err != nil {
+		t.Fatal(err)
+	}
+	var core map[string]json.RawMessage
+	if err := json.Unmarshal(v["core"], &core); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := core["modified"]; !ok {
+		t.Fatal("no core.modified in the document")
+	}
+	delete(core, "modified")
+	c, err := json.Marshal(core)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v["core"] = c
+	out, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // firstDiff shows where two outputs part.

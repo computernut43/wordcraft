@@ -1,9 +1,9 @@
 package docx
 
-// Drawings (w:drawing): their frame, anchoring and wrapping, and pictures (Rust
-// crates/docx/src/read/story.rs read_drawing, read_pic, nv_alt, anchor_float, wrap_polygon,
-// xfrm_spin). Charts, diagrams, ink, canvases, groups and shapes aren't ported yet: meeting one
-// makes the read refuse the file.
+// Drawings (w:drawing): their frame, anchoring and wrapping, pictures, shapes, groups and
+// canvases (Rust crates/docx/src/read/story.rs read_drawing, read_pic, read_wsp, read_group,
+// read_canvas, group_members, nv_alt, anchor_float, wrap_polygon, xfrm_spin, group_xfrm). Charts,
+// diagrams, ink and freeforms aren't ported yet: meeting one makes the read refuse the file.
 
 import (
 	"slices"
@@ -70,15 +70,17 @@ func (r *reader) readDrawing(sc *storyCtx, d *El, rels Rels) (doc.Object, bool) 
 	case strings.HasSuffix(uri, "/chart"), strings.HasSuffix(uri, "/diagram"):
 		r.unported("charts and diagrams")
 		return doc.Object{}, false
-	case gd.Child("wpc:wpc") != nil:
-		r.unported("drawing canvases")
-		return doc.Object{}, false
-	case gd.Child("wpg:wgp") != nil:
-		r.unported("drawing groups")
-		return doc.Object{}, false
 	}
 	var obj doc.Object
-	if gd.Find("a:blip") != nil {
+	if cv := gd.Child("wpc:wpc"); cv != nil {
+		obj = r.readCanvas(sc, cv, rels, w, h, float)
+	} else if g := gd.Child("wpg:wgp"); g != nil {
+		o, ok := r.readGroup(sc, g, rels, w, h, float)
+		if !ok {
+			return doc.Object{}, false
+		}
+		obj = o
+	} else if gd.Find("a:blip") != nil {
 		o, ok := r.readPic(gd, rels, w, h, alt, float)
 		if !ok {
 			return doc.Object{}, false
@@ -91,12 +93,7 @@ func (r *reader) readDrawing(sc *storyCtx, d *El, rels Rels) (doc.Object, bool) 
 		}
 		// Not ported yet: freeforms (custom geometry, ink drawn as freeforms) and colours in
 		// linear RGB (a:scrgbClr needs glibc's pow).
-		if sp := wsp.Child("wps:spPr"); sp != nil && sp.Child("a:custGeom") != nil {
-			r.unported("freeform shapes")
-			return doc.Object{}, false
-		}
-		if wsp.Find("a:scrgbClr") != nil {
-			r.unported("linear RGB colours (a:scrgbClr)")
+		if !r.wspPorted(wsp) {
 			return doc.Object{}, false
 		}
 		obj = r.readWsp(sc, wsp, rels, w, h, float)
@@ -128,8 +125,241 @@ func (r *reader) readDrawing(sc *storyCtx, d *El, rels Rels) (doc.Object, bool) 
 	case doc.Shape:
 		settle(&v.Float)
 		obj = doc.Object{InlineObject: v}
+	case doc.Group:
+		settle(&v.Float)
+		obj = doc.Object{InlineObject: v}
 	}
 	return obj, true
+}
+
+// wspPorted refuses (false) a shape whose reading isn't ported yet: freeforms (custom geometry,
+// ink drawn as freeforms) and colours in linear RGB (a:scrgbClr needs glibc's pow).
+func (r *reader) wspPorted(wsp *El) bool {
+	if sp := wsp.Child("wps:spPr"); sp != nil && sp.Child("a:custGeom") != nil {
+		r.unported("freeform shapes")
+		return false
+	}
+	if wsp.Find("a:scrgbClr") != nil {
+		r.unported("linear RGB colours (a:scrgbClr)")
+		return false
+	}
+	return true
+}
+
+// CanvasSpinExt is the a:ext URI under which WordCraft keeps a drawing canvas's rotation and
+// flips (an a:xfrm): the canvas schema has no transform of its own.
+const CanvasSpinExt = "urn:wordcraft:canvas-xfrm"
+
+// xfrm is a shape's position and size, and its members' space for a group (points).
+type xfrm struct {
+	off, ext     [2]float32
+	chOff, chExt [2]float32
+	hasChOff     bool
+	hasChExt     bool
+}
+
+// groupXfrm is the a:xfrm (or a content part's w14:xfrm) in shape properties sppr (zeros when
+// missing).
+func groupXfrm(sppr *El) xfrm {
+	var x *El
+	if sppr != nil {
+		if x = sppr.Child("a:xfrm"); x == nil {
+			x = sppr.Child("w14:xfrm")
+		}
+	}
+	pair := func(name, a, b string) ([2]float32, bool) {
+		if x == nil {
+			return [2]float32{}, false
+		}
+		e := x.Child(name)
+		if e == nil {
+			return [2]float32{}, false
+		}
+		v := func(n string) float32 {
+			if m, ok := attrMeasure(e, n, 12_700); ok {
+				return fclamp(m, -MaxLenPt, MaxLenPt)
+			}
+			return 0
+		}
+		return [2]float32{v(a), v(b)}, true
+	}
+	pos := func(p [2]float32, ok bool) ([2]float32, bool) {
+		return [2]float32{rustcompat.Max(p[0], 0), rustcompat.Max(p[1], 0)}, ok
+	}
+	var out xfrm
+	out.off, _ = pair("a:off", "x", "y")
+	out.ext, _ = pos(pair("a:ext", "cx", "cy"))
+	out.chOff, out.hasChOff = pair("a:chOff", "x", "y")
+	out.chExt, out.hasChExt = pos(pair("a:chExt", "cx", "cy"))
+	return out
+}
+
+// readGroup reads a wpg:wgp group (w × h): its pictures, shapes and text boxes, nested groups
+// flattened into it. False when it has no member to show.
+func (r *reader) readGroup(sc *storyCtx, g *El, rels Rels, w, h float32, float doc.Float) (doc.Object, bool) {
+	sppr := g.Child("wpg:grpSpPr")
+	x := groupXfrm(sppr)
+	float.SetSpin(xfrmSpin(sppr))
+	// The members' space; without a:chExt it is the group's own size.
+	chW, chH := rustcompat.Max(w, 1), rustcompat.Max(h, 1)
+	if x.hasChExt && x.chExt[0] > 0 && x.chExt[1] > 0 {
+		chW, chH = x.chExt[0], x.chExt[1]
+	}
+	var children doc.Vec[doc.GroupChild]
+	r.groupMembers(sc, g, rels, [4]float32{-x.chOff[0], -x.chOff[1], 1, 1}, 0, &children)
+	if len(children) == 0 {
+		return doc.Object{}, false
+	}
+	return doc.Object{InlineObject: doc.Group{W: doc.F32(w), H: doc.F32(h), Float: float, ChW: doc.F32(chW), ChH: doc.F32(chH), Children: children}}, true
+}
+
+// readCanvas reads a wpc:wpc Drawing Canvas (w × h, ECMA-376 Part 1 §20.4 and the Word 2010
+// canvas schema): its wpc:bg fill, wpc:whole outline and members, which sit in the canvas's own
+// space (offsets from its top-left corner, unscaled). An empty canvas is kept. A turned or
+// flipped canvas keeps its turn in WordCraft's wpc:extLst extension (CanvasSpinExt).
+func (r *reader) readCanvas(sc *storyCtx, c *El, rels Rels, w, h float32, float doc.Float) doc.Object {
+	var spinExt *El
+	if l := c.Child("wpc:extLst"); l != nil {
+		for _, e := range l.Els() {
+			if u, ok := e.Attr("uri"); ok && e.Name == "a:ext" && u == CanvasSpinExt {
+				spinExt = e
+				break
+			}
+		}
+	}
+	float.SetSpin(xfrmSpin(spinExt))
+	solid := func(e *El) *doc.RGB {
+		if e == nil {
+			return nil
+		}
+		if f := e.Child("a:solidFill"); f != nil {
+			if c := f.Child("a:srgbClr"); c != nil {
+				if v, ok := c.Attr("val"); ok {
+					if rgb, ok := doc.ParseRGB(v); ok {
+						return &rgb
+					}
+				}
+			}
+		}
+		return nil
+	}
+	var ln *El
+	if wh := c.Child("wpc:whole"); wh != nil {
+		ln = wh.Child("a:ln")
+	}
+	sw := float32(0)
+	if ln != nil {
+		if m, ok := attrMeasure(ln, "w", 12_700); ok {
+			sw = m
+		}
+	}
+	style := doc.CanvasStyle{Fill: solid(c.Child("wpc:bg")), Stroke: solid(ln), StrokeWidth: doc.F32(fclamp(sw, 0, 100))}
+	children := doc.Vec[doc.GroupChild]{}
+	r.groupMembers(sc, c, rels, [4]float32{0, 0, 1, 1}, 0, &children)
+	return doc.Object{InlineObject: doc.Group{W: doc.F32(w), H: doc.F32(h), Float: float, ChW: doc.F32(rustcompat.Max(w, 1)),
+		ChH: doc.F32(rustcompat.Max(h, 1)), Children: children, Canvas: &style}}
+}
+
+// maxGroupDepth is the deepest group-in-group nesting read.
+const maxGroupDepth = 8
+
+// groupMembers reads the members of group g into out, mapped into the outermost group's space by
+// t (x0, y0, sx, sy: outer = x0 + inner × sx).
+func (r *reader) groupMembers(sc *storyCtx, g *El, rels Rels, t [4]float32, depth int, out *doc.Vec[doc.GroupChild]) {
+	x0, y0, sx, sy := t[0], t[1], t[2], t[3]
+	for _, e := range g.Els() {
+		if len(*out) >= doc.MaxGroupChildren {
+			return
+		}
+		switch e.Name {
+		case "w14:contentPart":
+			r.unported("ink")
+			return
+		case "mc:AlternateContent":
+			choice := childrenOfChoice(e)
+			if choice == nil {
+				continue
+			}
+			first := choice.Els()
+			if len(first) == 0 {
+				continue
+			}
+			if choice.Name == "mc:Choice" && first[0].Name == "w14:contentPart" {
+				r.unported("ink")
+				return
+			}
+			e = first[0]
+		}
+		var sppr *El
+		switch e.Name {
+		case "wps:wsp":
+			sppr = e.Child("wps:spPr")
+		case "pic:pic":
+			sppr = e.Child("pic:spPr")
+		case "wpg:grpSp", "wpg:wgp":
+			// A group inside a canvas is a whole wpg:wgp.
+			sppr = e.Child("wpg:grpSpPr")
+		default:
+			continue
+		}
+		x := groupXfrm(sppr)
+		ox, oy, ew, eh := x.off[0], x.off[1], x.ext[0], x.ext[1]
+		if e.Name == "wpg:grpSp" || e.Name == "wpg:wgp" {
+			if depth >= maxGroupDepth {
+				continue
+			}
+			// Its members' space maps onto its own box. Each product is rounded on its own
+			// (float32(…)): Go may otherwise fuse a multiply and an add, which Rust never does.
+			cw, ch := rustcompat.Max(ew, 1), rustcompat.Max(eh, 1)
+			if x.hasChExt && x.chExt[0] > 0 && x.chExt[1] > 0 {
+				cw, ch = x.chExt[0], x.chExt[1]
+			}
+			kx, ky := ew/cw, eh/ch
+			nt := [4]float32{
+				x0 + float32((ox-float32(x.chOff[0]*kx))*sx),
+				y0 + float32((oy-float32(x.chOff[1]*ky))*sy),
+				sx * kx, sy * ky,
+			}
+			r.groupMembers(sc, e, rels, nt, depth+1, out)
+			if r.err != nil {
+				return
+			}
+			continue
+		}
+		fit := func(v, lo float32) float32 { return fclamp(geom.Finite(v), lo, MaxLenPt) }
+		w, h := fit(ew*sx, 0), fit(eh*sy, 0)
+		var nv *El
+		if e.Name == "pic:pic" {
+			nv = e.Find("pic:cNvPr")
+		} else {
+			nv = e.Child("wps:cNvPr")
+		}
+		alt, meta := nvAlt(nv)
+		float := doc.Float{Alt: meta, Hidden: nv != nil && onOffAttr(nv, "hidden")}
+		var obj doc.Object
+		if e.Name == "pic:pic" {
+			o, ok := r.readPic(e, rels, w, h, alt, float)
+			if !ok {
+				continue
+			}
+			obj = o
+		} else {
+			if !r.wspPorted(e) {
+				return
+			}
+			obj = r.readWsp(sc, e, rels, w, h, float)
+			var id string
+			has := false
+			if p := e.Child("wps:cNvPr"); p != nil {
+				id, has = p.Attr("id")
+			}
+			r.setShapeID(&obj, id, has)
+		}
+		if o, ok := obj.WithAltText(alt); ok {
+			obj = o
+		}
+		*out = append(*out, doc.GroupChild{X: doc.F32(fit(x0+float32(ox*sx), -MaxLenPt)), Y: doc.F32(fit(y0+float32(oy*sy), -MaxLenPt)), Obj: obj})
+	}
 }
 
 // readPic reads a picture (an a:blip under pic).
@@ -748,6 +978,13 @@ func cmpU32(a, b uint32) int {
 // keepGluedIDs drops the drawing ids read with shapes, except those connectors are glued to (so
 // a shape without connectors reads back as it was written).
 func keepGluedIDs(d *doc.Document, glued map[uint32]bool) {
+	clear := func(o doc.Object) doc.Object {
+		if s, ok := o.InlineObject.(doc.Shape); ok && s.Extra.ID != 0 && !glued[s.Extra.ID] {
+			s.Extra.ID = 0
+			return doc.Object{InlineObject: s}
+		}
+		return o
+	}
 	var walk func(bl doc.Vec[doc.Block], depth int)
 	walk = func(bl doc.Vec[doc.Block], depth int) {
 		if depth > MaxDepth {
@@ -757,9 +994,13 @@ func keepGluedIDs(d *doc.Document, glued map[uint32]bool) {
 			switch {
 			case b.Para != nil:
 				for i, o := range b.Para.Objects {
-					if s, ok := o.InlineObject.(doc.Shape); ok && s.Extra.ID != 0 && !glued[s.Extra.ID] {
-						s.Extra.ID = 0
-						b.Para.Objects[i] = doc.Object{InlineObject: s}
+					switch v := o.InlineObject.(type) {
+					case doc.Shape:
+						b.Para.Objects[i] = clear(o)
+					case doc.Group:
+						for j, c := range v.Children {
+							v.Children[j].Obj = clear(c.Obj)
+						}
 					}
 				}
 			case b.Table != nil:
