@@ -4,7 +4,7 @@ package docx
 // preset shapes, freeform paths, WordArt, groups and the header text watermark (Rust
 // crates/docx/src/read/story.rs read_vml_all, read_vml_group, vml_group_members, read_vml_shape,
 // vml_spt, vml_coordpair, vml_textbox, vml_style, vml_float, vml_watermark, vml_fraction,
-// vml_spin). OLE objects (w:object), which show a VML picture, aren't ported yet.
+// vml_spin), and OLE objects (w:object, read_object) shown as their picture.
 
 import (
 	"strings"
@@ -765,4 +765,30 @@ func vmlSpin(style string) geom.Spin {
 	}
 	flip, _ := vmlStyle(style, "flip")
 	return geom.NewSpin(rot, strings.Contains(flip, "x"), strings.Contains(flip, "y"))
+}
+
+// readObject reads an OLE object (w:object, ECMA-376 §17.3.3.19): shown as its picture (VML, or
+// a DrawingML picture in w:drawing), and kept whole so saving writes the object back.
+func (r *reader) readObject(sc *storyCtx, obj *El, rels Rels) (doc.Object, bool) {
+	var o doc.Object
+	if all := r.readVMLAll(sc, obj, rels); len(all) > 0 {
+		o = all[0]
+	} else {
+		d := obj.Child("w:drawing")
+		if d == nil {
+			return doc.Object{}, false
+		}
+		var ok bool
+		if o, ok = r.readDrawing(sc, d, rels); !ok {
+			return doc.Object{}, false
+		}
+	}
+	if img, ok := o.InlineObject.(doc.Image); ok {
+		img.OLE = nil
+		if e, ok := r.keepEmbedded(obj, rels, nil); ok {
+			img.OLE = e
+		}
+		o = doc.Object{InlineObject: img}
+	}
+	return o, true
 }

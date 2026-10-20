@@ -264,6 +264,8 @@ type docxGen struct {
 	chain                                                  bool
 	sdtContent                                             bool
 	images                                                 []string
+	oles                                                   []string // relationship ids of OLE embeddings and links
+	links                                                  []string // 65 external relationship ids, for an object at the id limit
 	txbxDepth                                              int
 	sdtStack                                               []bool
 }
@@ -680,6 +682,8 @@ func (g *docxGen) run() {
 		case 24:
 			if g.chance(3) {
 				g.pict()
+			} else if g.chance(2) {
+				g.object()
 			}
 		default:
 			g.text("w:t")
@@ -1402,6 +1406,47 @@ func (g *docxGen) custGeom() {
 		g.b.WriteString(`</a:path>`)
 	}
 	g.b.WriteString(`</a:pathLst></a:custGeom>`)
+}
+
+// object writes an OLE object (w:object): its picture (VML, or a DrawingML picture) and its
+// o:OLEObject, sometimes with relationships missing or more than are kept.
+func (g *docxGen) object() {
+	g.b.WriteString(`<w:object w:dxaOrig="1440" w:dyaOrig="960">`)
+	switch g.rng.IntN(5) {
+	case 0:
+		g.drawing()
+	case 1:
+		// No picture, or two drawings (the first is shown).
+		if g.chance(2) {
+			g.b.WriteString(`<v:rect style="width:10pt;height:20pt" fillcolor="red"/><v:oval style="width:5pt;height:5pt"/>`)
+		}
+	default:
+		img := "rIdMissing"
+		if len(g.images) > 0 && !g.chance(6) {
+			img = g.pick(g.images...)
+		}
+		g.b.WriteString(`<v:shape id="_x0000_i1025" type="#_x0000_t75" style="width:72pt;height:48pt" o:ole=""><v:imagedata r:id="` + img + `" o:title=""/></v:shape>`)
+	}
+	ole := "rIdNone"
+	if len(g.oles) > 0 && !g.chance(6) {
+		ole = g.pick(g.oles...)
+	}
+	g.b.WriteString(`<o:OLEObject Type="` + g.pick("Embed", "Link") + `" ProgID="Excel.Sheet.12" ShapeID="_x0000_i1025" DrawAspect="Content" ObjectID="_1234" r:id="` + ole + `"`)
+	if g.chance(20) {
+		// More relationship ids than one object may use.
+		for i := range 70 {
+			g.b.WriteString(` r:x` + strconv.Itoa(i) + `="` + ole + strconv.Itoa(i) + `"`)
+		}
+	} else if len(g.links) > 0 && g.chance(2) {
+		// At the limit: with r:id, 64 ids or 65.
+		for i, id := range g.links[:63+g.rng.IntN(2)] {
+			g.b.WriteString(` r:l` + strconv.Itoa(i) + `="` + id + `"`)
+		}
+	}
+	if g.chance(6) {
+		g.b.WriteString(` o:relid="` + g.pick(append(g.oles, "rIdNope")...) + `"`)
+	}
+	g.b.WriteString(`/></w:object>`)
 }
 
 // pict writes a w:pict of legacy VML: shapetypes, shapes, presets, lines, groups, pictures, text
@@ -2543,6 +2588,32 @@ func randomDocx(rng *rand.Rand) []byte {
 		name := g.pick("media/image1.png", "media/.png", "media/üü", "media/a b.png", "media/noext", "media/x.y.z", "img/image1.png", "media/image1_2.png", "../image1.png")
 		g.images = append(g.images, add("image", name))
 		files["word/"+strings.TrimPrefix(name, "../")] = "\x89PNG fake"
+	}
+	if g.chance(3) {
+		// OLE objects' embeddings: a file, a package with a part of its own, a missing part, a link.
+		g.oles = append(g.oles, add("oleObject", "embeddings/oleObject1.bin"))
+		files["word/embeddings/oleObject1.bin"] = "\xd0\xcf\x11\xe0ole"
+		if g.chance(2) {
+			g.oles = append(g.oles, add("package", "embeddings/Sheet1.xlsx"))
+			files["word/embeddings/Sheet1.xlsx"] = "PK sheet"
+			files["word/embeddings/_rels/Sheet1.xlsx.rels"] = relsXML([]relSpec{{"rIdE1", relBase + "image", "../media/preview.emf", ""}, {"rIdE2", relBase + "x", "../media/gone.bin", ""}})
+			files["word/media/preview.emf"] = "emf"
+		}
+		if g.chance(3) {
+			g.oles = append(g.oles, add("oleObject", "embeddings/missing.bin"))
+		}
+		if g.chance(3) {
+			id := "rId" + strconv.Itoa(len(docRels)+10)
+			docRels = append(docRels, relSpec{id, relBase + "oleObject", "file:///C:/data.xlsx", "External"})
+			g.oles = append(g.oles, id)
+		}
+		if g.chance(4) {
+			for i := range 65 {
+				id := "rIdL" + strconv.Itoa(i)
+				docRels = append(docRels, relSpec{id, relBase + "hyperlink", "https://example.com/" + strconv.Itoa(i), "External"})
+				g.links = append(g.links, id)
+			}
+		}
 	}
 	if g.chance(g.exotic) {
 		add("customXml", "../customXml/item1.xml")
