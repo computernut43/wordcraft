@@ -1,5 +1,7 @@
 github.com/computernut43/craft-libs v0.0.0-20261020132459-8d7f1d109188 h1:/9mGONO+GZtQE8oCLVTEppURSy9Nw7pv1E5/YzryerI=
 github.com/computernut43/craft-libs v0.0.0-20261020132459-8d7f1d109188/go.mod h1:HEc6A4e3ZM65AAwQO13M4Q7999IyUHz25BBaFBv3pWk=
+github.com/computernut43/craft-libs v0.0.0-20261020182846-e05ad1e6580b h1:40jB1vQqAXAAqlSgjjynMXIpEPJBpusuXxosP9+eYAE=
+github.com/computernut43/craft-libs v0.0.0-20261020182846-e05ad1e6580b/go.mod h1:HEc6A4e3ZM65AAwQO13M4Q7999IyUHz25BBaFBv3pWk=
 github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
 github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
 golang.org/x/mod v0.42.0 h1:ICeL3t2L30ljSPHHxDnR4fqVcBt/zR2zJAb9juavmQg=
