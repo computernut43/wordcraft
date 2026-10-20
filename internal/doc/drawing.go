@@ -289,7 +289,9 @@ func RubyOffset(raise, baseSize, size F32) F32 {
 
 // RubyRaise is the ruby raise (baseline to baseline, points) for a Phonetic Guide Offset.
 func RubyRaise(offset, baseSize, size F32) F32 {
-	return F32(float32(offset) + float32(0.8)*float32(baseSize) + float32(0.2)*float32(size))
+	// Each product is rounded on its own (float32(…)): Go may otherwise fuse a multiply and an
+	// add on some CPUs, which Rust never does.
+	return F32(float32(offset) + float32(float32(0.8)*float32(baseSize)) + float32(float32(0.2)*float32(size)))
 }
 
 // CanvasStyle is the background fill and outline of a Drawing Canvas.

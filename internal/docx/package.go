@@ -6,6 +6,7 @@ package docx
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -56,7 +57,7 @@ const (
 	RelGlossary           = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/glossaryDocument"
 )
 
-// ErrKind classifies package errors (the Rust DocxError variants used here).
+// ErrKind classifies errors as Rust's DocxError variants do.
 type ErrKind int
 
 // Error kinds.
@@ -65,9 +66,18 @@ const (
 	ErrZip ErrKind = iota + 1
 	// ErrLimit: a size or count limit was hit.
 	ErrLimit
+	// ErrXML: a part isn't well-formed XML.
+	ErrXML
+	// ErrMissingPart: a required part is absent.
+	ErrMissingPart
+	// ErrNotWord: the package is readable but isn't a WordprocessingML document.
+	ErrNotWord
+	// ErrNotPorted: the file uses something the Go reader doesn't read yet (Rust has no such
+	// error: it reads everything). Refusing keeps an unported feature from being dropped.
+	ErrNotPorted
 )
 
-// Error is a package error.
+// Error is a package or reader error.
 type Error struct {
 	Kind ErrKind
 	Msg  string
@@ -76,11 +86,29 @@ type Error struct {
 func (e *Error) Error() string {
 	switch e.Kind {
 	case ErrZip:
-		return "zip: " + e.Msg
+		return "not a valid zip package: " + e.Msg
 	case ErrLimit:
 		return "limit exceeded: " + e.Msg
+	case ErrXML:
+		return "malformed XML: " + e.Msg
+	case ErrMissingPart:
+		return "missing part: " + e.Msg
+	case ErrNotWord:
+		return "not a Word document: " + e.Msg
+	case ErrNotPorted:
+		return "not ported to Go yet: " + e.Msg
 	}
 	return e.Msg
+}
+
+// IsNotPorted reports whether err refuses a feature not ported yet.
+func IsNotPorted(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Kind == ErrNotPorted
+}
+
+func notPorted(format string, args ...any) error {
+	return &Error{ErrNotPorted, fmt.Sprintf(format, args...)}
 }
 
 // RelIs reports whether relationship type t is full, or ends with the same last segment

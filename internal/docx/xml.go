@@ -16,7 +16,6 @@ package docx
 
 import (
 	"bytes"
-	"errors"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -396,7 +395,7 @@ func invalidPrefix(b []byte) int {
 
 // xmlError is a parse failure. The wording isn't Rust's (quick-xml's messages); that a part
 // fails, and where it's read leniently, matches.
-func xmlError(what string) error { return errors.New("docx: XML: " + what) }
+func xmlError(what string) error { return &Error{ErrXML, what} }
 
 // Parse parses XML bytes into the root element.
 func Parse(b []byte) (*El, error) { return ParseNS(b, nil) }
@@ -1110,7 +1109,7 @@ func (p *parser) run() (*El, error) {
 			}
 			count++
 			if count > MaxElements {
-				return nil, xmlError("too many XML elements")
+				return nil, &Error{ErrLimit, "too many XML elements"}
 			}
 			qname := ev.raw[:ev.nameLen]
 			name := lossy(localName(qname))
@@ -1147,7 +1146,7 @@ func (p *parser) run() (*El, error) {
 			}
 			if ev.kind == evStart {
 				if len(stack) >= MaxDepth {
-					return nil, xmlError("XML nesting too deep")
+					return nil, &Error{ErrLimit, "XML nesting too deep"}
 				}
 				stack = append(stack, el)
 			} else {
