@@ -4,7 +4,10 @@ import (
 	"math"
 	"slices"
 
+	"github.com/computernut43/craft-libs/rustcompat"
 	"github.com/computernut43/craft-libs/serdejson"
+
+	"github.com/computernut43/wordcraft/internal/geom"
 )
 
 // Drawings' placement and shape properties: floating placement and wrapping (para.rs), wrap
@@ -101,6 +104,24 @@ type Float struct {
 }
 
 func (Float) SerdeDefault() {}
+
+// Spin is the rotation and flips.
+func (f Float) Spin() geom.Spin { return geom.NewSpin(float32(f.Rot), f.FlipH, f.FlipV) }
+
+// SetSpin sets the rotation and flips (the angle normalised).
+func (f *Float) SetSpin(s geom.Spin) {
+	f.Rot = F32(geom.NormalizeDegrees(s.Deg))
+	f.FlipH, f.FlipV = s.FlipH, s.FlipV
+}
+
+// SpinPad is how far a w × h frame's rotated bounds reach past it on each side (x, y): the room
+// a rotated object takes beyond its frame (zero unrotated; negative where the turned object is
+// narrower than its frame, as a wide picture turned 90° is).
+func (f Float) SpinPad(w, h float32) (float32, float32) {
+	w, h = rustcompat.Clamp(geom.Finite(w), 0, 4000), rustcompat.Clamp(geom.Finite(h), 0, 4000)
+	bw, bh := f.Spin().Extent(w, h)
+	return (bw - w) / 2, (bh - h) / 2
+}
 
 // EffectExtent is the effect extents, finite and clamped (left, top, right, bottom).
 func (f Float) EffectExtent() [4]F32 {

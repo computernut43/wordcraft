@@ -263,6 +263,7 @@ type docxGen struct {
 	exotic                                                 int // 1 in exotic: a feature the Go reader refuses
 	chain                                                  bool
 	sdtContent                                             bool
+	images                                                 []string
 	sdtStack                                               []bool
 }
 
@@ -674,9 +675,7 @@ func (g *docxGen) run() {
 			g.close("mc:Fallback")
 			g.close("mc:AlternateContent")
 		case 23:
-			if g.chance(g.exotic) {
-				g.b.WriteString(`<w:drawing><wp:inline><wp:extent cx="100" cy="100"/></wp:inline></w:drawing>`)
-			}
+			g.drawing()
 		case 24:
 			if g.chance(g.exotic) {
 				g.b.WriteString(`<w:pict><v:rect style="width:10pt"/></w:pict>`)
@@ -1042,6 +1041,127 @@ func (g *docxGen) blocks(depth, n int) {
 			g.para(depth)
 		}
 	}
+}
+
+// drawing writes a w:drawing: usually a picture, inline or anchored, with random frame, anchoring,
+// wrapping, rotation, crop and alternative text; sometimes a kind not ported yet.
+func (g *docxGen) drawing() {
+	g.b.WriteString(`<w:drawing>`)
+	anchored := g.chance(2)
+	if anchored {
+		g.open("wp:anchor", ga{"distT", g.num()}, ga{"distB", g.num()}, ga{"distL", g.num()}, ga{"distR", g.num()}, ga{"behindDoc", g.from(onOffPool)},
+			ga{"layoutInCell", g.from(onOffPool)}, ga{"simplePos", g.enum("0")}, ga{"relativeHeight", g.num()})
+		for _, side := range []string{"H", "V"} {
+			if g.chance(4) {
+				continue
+			}
+			alt := g.chance(6)
+			if alt {
+				g.b.WriteString(`<mc:AlternateContent><mc:Choice Requires="wp14"><wp:position` + side + ` relativeFrom="page"><wp14:pctPosVOffset>5000</wp14:pctPosVOffset></wp:position` + side + `></mc:Choice><mc:Fallback>`)
+			}
+			g.open("wp:position"+side, ga{"relativeFrom", g.enum("page", "margin", "leftMargin", "rightMargin", "insideMargin", "outsideMargin", "character", "topMargin", "bottomMargin", "line", "paragraph", "column", "bogus")})
+			if g.chance(2) {
+				g.b.WriteString(`<wp:align>` + g.pick("left", " center ", "right", "inside", "outside", "top", "bottom", "x") + `</wp:align>`)
+			} else {
+				g.b.WriteString(`<wp:posOffset>` + textEsc(g.num()()) + `</wp:posOffset>`)
+			}
+			g.close("wp:position" + side)
+			if alt {
+				g.b.WriteString(`</mc:Fallback></mc:AlternateContent>`)
+			}
+		}
+	} else {
+		g.open("wp:inline", ga{"distT", g.num()})
+	}
+	if !g.chance(8) {
+		g.leaf("wp:extent", ga{"cx", g.enum("914400", "457200", "0", "-5", "99999999999", "12700", "1in")}, ga{"cy", g.enum("914400", "685800", "1", "abc")})
+	}
+	if g.chance(2) {
+		g.leaf("wp:effectExtent", ga{"l", g.num()}, ga{"t", g.num()}, ga{"r", g.num()}, ga{"b", g.num()})
+	}
+	if anchored {
+		switch g.rng.IntN(6) {
+		case 0:
+			g.leaf("wp:wrapSquare", ga{"wrapText", g.enum("bothSides", "left", "right", "largest", "bogus")})
+		case 1, 2:
+			name := g.pick("wp:wrapTight", "wp:wrapThrough")
+			g.open(name, ga{"wrapText", g.enum("bothSides", "largest")})
+			if g.chance(4) == false {
+				g.open("wp:wrapPolygon", ga{"edited", g.from(onOffPool)})
+				pts := [][2]string{{"0", "0"}, {"0", "21600"}, {"21600", "21600"}, {"21600", "0"}, {"0", "0"}}
+				if g.chance(4) {
+					pts = [][2]string{{"5", "5"}, {"100", "9"}, {"5", "5"}}
+				} else if g.chance(2) {
+					pts = nil
+					for range g.rng.IntN(7) {
+						pts = append(pts, [2]string{g.num()(), g.num()()})
+					}
+				}
+				for i, p := range pts {
+					el := "wp:lineTo"
+					if i == 0 {
+						el = "wp:start"
+					}
+					g.b.WriteString(`<` + el + ` x="` + xmlEsc(p[0]) + `" y="` + xmlEsc(p[1]) + `"/>`)
+				}
+				g.close("wp:wrapPolygon")
+			}
+			g.close(name)
+		case 3:
+			g.leaf("wp:wrapTopAndBottom")
+		case 4:
+			g.leaf("wp:wrapNone")
+		}
+	}
+	g.b.WriteString(`<wp:docPr id="` + g.pick("1", "2", "0", "x") + `" name="Picture 1"`)
+	for _, a := range []string{"descr", "title"} {
+		if g.chance(2) {
+			g.b.WriteString(` ` + a + `="` + xmlEsc(g.pick("A cat", "", strings.Repeat("d", 300), "line\nbreak")) + `"`)
+		}
+	}
+	if g.chance(4) {
+		g.b.WriteString(` hidden="` + g.pick(onOffPool...) + `"`)
+	}
+	g.b.WriteString(`>`)
+	if g.chance(4) {
+		g.b.WriteString(`<a:extLst><a:ext uri="` + g.pick(DecorativeExt, "{c183d7f6-b498-43b3-948b-1728b52aa6e4}", "{X}") + `"><adec:decorative xmlns:adec="http://schemas.microsoft.com/office/drawing/2017/decorative" val="` + g.pick("1", "0") + `"/></a:ext></a:extLst>`)
+	}
+	g.b.WriteString(`</wp:docPr>`)
+	g.b.WriteString(`<a:graphic>`)
+	switch {
+	case g.chance(g.exotic):
+		g.b.WriteString(`<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId1"/></a:graphicData>`)
+	case g.chance(g.exotic):
+		g.b.WriteString(`<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr/></wps:wsp></a:graphicData>`)
+	case g.chance(10):
+		g.b.WriteString(`<a:graphicData uri="x"/>`)
+	default:
+		g.b.WriteString(`<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="p"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill>`)
+		id := "rIdMissing"
+		if len(g.images) > 0 && !g.chance(8) {
+			id = g.pick(g.images...)
+		}
+		if !g.chance(10) {
+			g.b.WriteString(`<a:blip r:embed="` + id + `"/>`)
+		} else {
+			g.b.WriteString(`<a:blip/>`)
+		}
+		if g.chance(3) {
+			g.b.WriteString(`<a:srcRect l="` + g.pick("0", "10000", "-5", "150000", "x", "33333") + `" t="` + g.pick("0", "500") + `" r="` + g.pick("25000", "") + `" b="7"/>`)
+		}
+		g.b.WriteString(`<a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr>`)
+		if g.chance(2) {
+			g.b.WriteString(`<a:xfrm rot="` + g.pick("0", "5400000", "-5400000", "2700000", "21600000", "99999999999", "x", "1234567", "-1234567", "-21599999") + `" flipH="` + g.pick(onOffPool...) + `" flipV="` + g.pick("0", "1") + `"><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>`)
+		}
+		g.b.WriteString(`<a:prstGeom prst="rect"/></pic:spPr></pic:pic></a:graphicData>`)
+	}
+	g.b.WriteString(`</a:graphic>`)
+	if anchored {
+		g.close("wp:anchor")
+	} else {
+		g.close("wp:inline")
+	}
+	g.b.WriteString(`</w:drawing>`)
 }
 
 // sdtOpen starts a content control (w:sdt with random properties and an end-properties
@@ -1672,10 +1792,10 @@ func randomDocx(rng *rand.Rand) []byte {
 		add("webSettings", "webSettings.xml")
 		files["word/webSettings.xml"] = `<?xml version="1.0"?><w:webSettings ` + nsW + `/>`
 	}
-	for range g.rng.IntN(3) {
-		name := g.pick("media/image1.png", "media/.png", "media/üü", "media/a b.png", "media/noext", "media/x.y.z")
-		add("image", name)
-		files["word/"+name] = "\x89PNG fake"
+	for range g.rng.IntN(4) {
+		name := g.pick("media/image1.png", "media/.png", "media/üü", "media/a b.png", "media/noext", "media/x.y.z", "img/image1.png", "media/image1_2.png", "../image1.png")
+		g.images = append(g.images, add("image", name))
+		files["word/"+strings.TrimPrefix(name, "../")] = "\x89PNG fake"
 	}
 	if g.chance(g.exotic) {
 		add("customXml", "../customXml/item1.xml")

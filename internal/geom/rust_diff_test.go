@@ -45,7 +45,7 @@ func TestMatchesRust(t *testing.T) {
 	}
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	exact, trig, bad := 0, 0, 0
+	exact, bad := 0, 0
 	for i := 0; sc.Scan(); i++ {
 		if i >= len(cases) {
 			t.Fatal("reference printed more lines than inputs")
@@ -54,8 +54,6 @@ func TestMatchesRust(t *testing.T) {
 		switch {
 		case sameAnswer(got, want):
 			exact++
-		case strings.HasPrefix(cases[i], "spin ") && spinMatches(cases[i], got, want):
-			trig++
 		default:
 			bad++
 			if bad <= 20 {
@@ -66,19 +64,7 @@ func TestMatchesRust(t *testing.T) {
 	if bad > 0 {
 		t.Fatalf("%d of %d cases differ from Rust", bad, len(cases))
 	}
-	t.Logf("%d cases: %d identical, %d spins whose sine or cosine differ by one ULP (all else exact)", len(cases), exact, trig)
-}
-
-// spinMatches accepts a spin answer whose sine and cosine (the linear part a, b, c, d) are within
-// one ULP of Rust's, and whose every other value is exactly what Go computes from Rust's own
-// linear part: the trigonometry may differ in the last bit, the arithmetic after it may not.
-func spinMatches(line, got, want string) bool {
-	g, w := strings.Fields(got), strings.Fields(want)
-	if len(g) < 4 || len(w) < 4 || !withinULP(strings.Join(g[:4], " "), strings.Join(w[:4], " "), 1) {
-		return false
-	}
-	a, b, c, d := fromBits(w[0]), fromBits(w[1]), fromBits(w[2]), fromBits(w[3])
-	return sameAnswer(spinAnswerFrom(line, a, b, c, d), want)
+	t.Logf("%d cases: %d identical", len(cases), exact)
 }
 
 // sameAnswer compares token by token, treating any two NaN bit patterns as equal: which NaN
@@ -104,56 +90,6 @@ func isNaNBits(tok string) bool {
 	}
 	u, err := strconv.ParseUint(tok, 16, 32)
 	return err == nil && u&0x7f80_0000 == 0x7f80_0000 && u&0x007f_ffff != 0
-}
-
-// spinAnswerFrom is goAnswer for a spin line, given the linear part.
-func spinAnswerFrom(line string, a, b, c, d float32) string {
-	f := strings.Split(line, " ")
-	fl := func(i int) float32 { return fromBits(f[i]) }
-	sp := NewSpin(fl(1), f[2] == "1", f[3] == "1")
-	cx, cy, x, y := fl(4), fl(5), fl(6), fl(7)
-	r := NewRect(fl(8), fl(9), fl(10), fl(11))
-	var v []string
-	for _, m := range matrixOf(a, b, c, d, cx, cy) {
-		v = append(v, fbits(m))
-	}
-	ax, ay := applyOf(a, b, c, d, cx, cy, x, y)
-	ux, uy := applyOf(a, c, b, d, cx, cy, x, y)
-	// |sin| = |b| and |cos| = |a|: the flips only change signs.
-	ew, eh := extentOf(abs32(b), abs32(a), r.W, r.H)
-	bo := boundsOf(r, ew, eh)
-	v = append(v, fbits(ax), fbits(ay), fbits(ux), fbits(uy), fbits(bo.X), fbits(bo.Y), fbits(bo.W), fbits(bo.H), fbits(ew), fbits(eh), fbits(sp.Deg))
-	v = append(v, strconv.FormatBool(sp.IsIdentity()))
-	return strings.Join(v, " ")
-}
-
-// withinULP compares two answers token by token: float bit patterns may differ by n ULPs.
-func withinULP(a, b string, n int64) bool {
-	x, y := strings.Fields(a), strings.Fields(b)
-	if len(x) != len(y) {
-		return false
-	}
-	for i := range x {
-		if x[i] == y[i] {
-			continue
-		}
-		p, err1 := strconv.ParseUint(x[i], 16, 32)
-		q, err2 := strconv.ParseUint(y[i], 16, 32)
-		if err1 != nil || err2 != nil || len(x[i]) != 8 {
-			return false
-		}
-		// Map sign-magnitude bits onto a monotonic integer line.
-		ord := func(u uint64) int64 {
-			if u&0x8000_0000 != 0 {
-				return -int64(u & 0x7fff_ffff)
-			}
-			return int64(u)
-		}
-		if d := ord(p) - ord(q); d > n || d < -n {
-			return false
-		}
-	}
-	return true
 }
 
 func fbits(v float32) string { return fmt.Sprintf("%08x", math.Float32bits(v)) }
