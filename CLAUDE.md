@@ -1,10 +1,15 @@
 # WordCraft — instructions for agents
 
-WordCraft is a clean-room, open-source, Rust-native word processor targeting Microsoft Word parity — and going further on speed, openness and agent control. It runs natively on macOS, Windows, Linux and BSD, and on the web via WASM. Siblings with the same conventions: `../photocraft` (Photoshop), `../vectorcraft` (Illustrator), `../filmcraft` (Premiere), `../lightcraft` (Lightroom), `../pdfcraft` (Acrobat), `../effectcraft` (After Effects), `../designcraft` (InDesign). Shared rules and learnings: [`storytold/craftrules`](https://github.com/storytold/craftrules) (`../../craftrules`) — read its `AGENTS.md`.
+WordCraft is a clean-room, open-source word processor, written in Rust and being ported to Go ([`MIGRATION.md`](MIGRATION.md)), targeting Microsoft Word parity — and going further on speed, openness and agent control. It runs natively on macOS, Windows, Linux and BSD, and on the web via WASM. Siblings with the same conventions: `../photocraft` (Photoshop), `../vectorcraft` (Illustrator), `../filmcraft` (Premiere), `../lightcraft` (Lightroom), `../pdfcraft` (Acrobat), `../effectcraft` (After Effects), `../designcraft` (InDesign). Shared rules and learnings: [`storytold/craftrules`](https://github.com/storytold/craftrules) (`../../craftrules`) — read its `AGENTS.md`.
 
 ## Start every session here
 1. Read `plan/STATUS.md` (current milestone, next task), then the task in `plan/execution-plan.md` and the relevant `plan/architecture.md` section. `plan/` is gitignored (local only); if it's missing, start from `ROADMAP.md`, `docs/gaps.md` and `docs/roadmap.md` (Current focus).
 2. Follow the autonomous operation protocol (`plan/execution-plan.md` §5). Don't stop to ask unless a decision is genuinely the owner's (licensing, publishing, pushing to new remotes, secrets).
+
+## Go migration (in progress)
+- The plan, decisions and parity checklist are in [`MIGRATION.md`](MIGRATION.md). New work goes to Go; the Rust tree (`crates/`, `apps/`, `xtask/`) is frozen at `9b4b948` as the reference and only gets fixes needed for that role. It is removed in one reviewed cutover, never piecemeal.
+- Go module `github.com/computernut43/wordcraft` at the root: `internal/<unit>` per Rust crate, `cmd/` for apps, `tools/ci` for gates. Shared Craft code and tooling come from [`computernut43/craft-libs`](https://github.com/computernut43/craft-libs) (its Go module), required by commit; use an uncommitted `go.work` to develop both together.
+- Port one small component at a time: document the Rust behaviour and its tests first, port the tests, implement idiomatic Go, run the gates, then update the checklist in `MIGRATION.md`. Claim parity only after comparing with the Rust reference (`internal/rustref`; set `WORDCRAFT_RUST_CLI` to a `wordcraft-cli` built from `9b4b948`).
 
 ## Never crash
 People trust WordCraft with their writing; a crash loses their work. **This outranks feature work**: never ship a feature through a panic path, and fix a crash before building on top of it. Standard: [`craftrules/standards/never-crash.md`](https://github.com/storytold/craftrules/blob/main/standards/never-crash.md).
@@ -14,12 +19,13 @@ People trust WordCraft with their writing; a crash loses their work. **This outr
 - **Last-resort guard:** `Session::run` turns an escaped panic into an error and restores the document. It's a safety net, not a licence.
 - **Prove it:** every crash fix lands with a regression test. `crates/engine/src/tests.rs::hostile_params_never_panic` runs every command with junk params — keep it green.
 - Production crate roots carry `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]`; new crates start with it. Tests may `unwrap` (`clippy.toml`).
+- **Go:** the same standard, enforced by craft-libs' `devtools/nopanic` (no `panic`, no `Must…` with non-constant arguments, no `log.Panic*`/`log.Fatal*`, no `os.Exit` outside `package main`). Go can still panic implicitly, so `recover` guards every boundary (`Session.Run`, I/O, MCP, control channel), indexing of input-derived data is bounds-checked, and every reader has a `go test -fuzz` target.
 
 ## Assets: absolutely no Microsoft (or Adobe/Avid/Autodesk) iconography or images
 **This rule is non-negotiable.** Breaking it is the worst mistake you can make in this repo.
 - Never copy, trace, screenshot-crop or recreate icons, images, templates, themes, clip art, fonts, cursors, sounds or any other asset from Microsoft Word/Office or any Microsoft, Adobe, Avid or Autodesk product. Not even "temporarily".
 - Every asset must be **original** (drawn in code — prefer this: `crates/ui-egui/src/icons.rs`), **public domain / CC0**, **OSI open source**, or **Creative Commons that allows redistribution**, or licensed open source by a contributor who made it.
-- **Every asset file has a row in [`ATTRIBUTION.md`](ATTRIBUTION.md)** (author, source, licence). `cargo xtask assets` (part of `cargo xtask ci`) fails otherwise. Add the row in the same commit as the file.
+- **Every asset file has a row in [`ATTRIBUTION.md`](ATTRIBUTION.md)** (author, source, licence). `cargo xtask assets` (part of `cargo xtask ci`) and `go run ./tools/ci assets` fail otherwise. Add the row in the same commit as the file.
 - Fonts: new font files go to [`storytold/craft-fonts`](https://github.com/storytold/craft-fonts), never this repo; it's an optional build input (`CRAFT_FONTS_DIR`). Documents asking for proprietary fonts (Calibri, Aptos, Cambria…) are rendered with installed system fonts or metric-compatible open substitutes (`crates/fonts/src/word.rs`) — never bundle proprietary fonts.
 - Templates, sample documents and themes are our own text and colours (`crates/engine/src/sample.rs`, `cmd/design.rs`). Demo images are public domain, with sources recorded.
 
@@ -42,11 +48,11 @@ People trust WordCraft with their writing; a crash loses their work. **This outr
 
 - **Everything is a command.** User-visible behaviour = a `CommandSpec` in `crates/engine/src/cmd/*.rs` (id, label, ribbon location, shortcut, params doc, `enabled`, `run`) + tests. UI-only commands (`ui.*`) live in `crates/ui-egui/src/lib.rs`. The ribbon, shortcuts, command search, CLI, control channel and MCP all dispatch by id. Programmatic calls never open dialogs.
 - **Parity is measured:** `crates/engine/src/catalog.rs` lists Word's ribbon/menu features with command ids. `cargo xtask parity` writes `docs/parity-checklist.md`; a test enforces a floor that only rises. Implement missing ids to raise it.
-- **Layering** is enforced by `cargo xtask layers`. Nothing below L6 depends on egui/eframe/winit/rfd. The UI is thin and reads `Session` state; colours come from `theme::Tokens`.
-- **Rust only** (no handwritten JS/TS). **Never break wasm** (`cargo xtask wasm`).
+- **Layering** is enforced by `cargo xtask layers` and, for Go, `go run ./tools/ci layers` (table in `tools/ci/layers.go`). Nothing below L6 depends on egui/eframe/winit/rfd (Go: Gio, Fyne). The UI is thin and reads `Session` state; colours come from `theme::Tokens`.
+- **Rust and Go only** while the port runs, and Go for new work (no handwritten JS/TS; Go's own `wasm_exec.js` is used as shipped). **Never break wasm** (`cargo xtask wasm`; `go run ./tools/ci wasm`).
 
 ## Quality gates
-Before every commit: `cargo xtask ci` (fmt, clippy -D warnings, tests, assets, layers, wasm). Commit after every arc of work that builds, with a task id in the message (`M2.1: line spacing dialog`).
+Before every commit: for Go changes `go run ./tools/ci` (gofmt, vet, nopanic, layers, assets, staticcheck, tests, wasm, dependency licences, govulncheck; run one with `go run ./tools/ci <gate>`); for Rust changes `cargo xtask ci` (fmt, clippy -D warnings, tests, assets, layers, wasm). `govulncheck` needs access to vuln.go.dev; where the network blocks it, CI runs it. Commit after every arc of work that builds, with a task id in the message (`M2.1: line spacing dialog`).
 
 ## Typing behaves like Word
 Typing, Enter, Backspace, Tab, lists, AutoCorrect and AutoFormat follow Word's observed behaviour in [`docs/typing-parity.md`](docs/typing-parity.md), pinned by `crates/engine/src/tests_typing.rs` (keys go through the same commands as the keyboard). Change behaviour, doc and tests together; a typing fix lands with a test there. Compare headlessly (`ui_shot`); don't drive GUIs with keystrokes on the shared machine.

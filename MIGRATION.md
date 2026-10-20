@@ -1,6 +1,6 @@
 # WordCraft: Rust → Go migration plan
 
-> **Status:** draft for owner review, nothing ported yet · **Created:** 2026-10-20 · **Rust baseline:** `9b4b948` (computernut43/wordcraft `main`)
+> **Status:** approved 2026-10-20; M0 (groundwork) done, M1 next · **Created:** 2026-10-20 · **Rust baseline:** `9b4b948` (computernut43/wordcraft `main`)
 >
 > This plan covers Phase 2 of the migration (planning). No Go code exists yet, and no Rust code is to be removed until
 > the matching Go code builds, passes its tests and has been reviewed (§9).
@@ -13,6 +13,8 @@
 | Browser | Required, in Go | Every package below the UI must build for `GOOS=js GOARCH=wasm`. A wasm build check is a gate from M0. |
 | cgo | Allowed, "but let's be secure about it" | cgo is for OS integration only, and only where `purego` or `x/sys` can't do the job. Any temporary use of Rust from Go goes through a sandboxed subprocess, not cgo (§5). |
 | Upstream `storytold/wordcraft` | Not merged any more; the fork goes its own way | The Rust tree is **frozen** at a baseline tag and serves as the reference implementation. There's no drift to track. |
+| craft-libs | Port it to Go as well, in the owner's fork [`computernut43/craft-libs`](https://github.com/computernut43/craft-libs) (2026-10-20) | Shared Craft code (PDF writing, printing, UI controls, settings, …) and the shared Go tooling live there as the Go module `github.com/computernut43/craft-libs`; WordCraft requires it by commit. Its own plan: `MIGRATION.md` in that repository. Licence confirmed `MIT OR Apache-2.0`. |
+| Where the code goes | The owner's forks (2026-10-20) | All work is pushed to `computernut43/wordcraft` and `computernut43/craft-libs` only, on branch `claude/charming-hopper-wtmlhw` until merged; nothing goes to `storytold`. |
 | Where the Go code lives | Undecided ("what is the best way?") | **Recommendation: this repository, with a Go module at the repo root, side by side with the Rust tree until cutover** (§2). |
 | The "Rust only" rule and the `cargo xtask ci` gate | To be updated | M0 rewrites `CLAUDE.md`/`AGENTS.md` for the dual-language period and adds Go gates (§7). |
 
@@ -29,7 +31,9 @@ Recommendation: **one repository, Go module at the root, Rust frozen beside it, 
 - Shared, language-neutral material stays where it is and is used by both: `assets/` (fonts, spelling,
   hyphenation, icons), `ATTRIBUTION.md`, `NOTICE`, `LICENSE-*`, `docs/`, `packaging/`, and the i18n catalogs
   (`crates/ui-egui/src/i18n/*.tsv`, moved to `assets/i18n/` when the Go UI needs them).
-- **Freeze:** tag the baseline `rust-baseline` (`9b4b948`). From then on the Rust code changes only to fix bugs that
+- **Freeze:** the baseline is commit `9b4b948c6ecf29401e01ad58626d3c1983b83770`, pinned by SHA in the Go workflow and the
+  agent instructions. (A `rust-baseline` tag is optional; this session's git access can't push tags, so the owner
+  can add it on GitHub.) From then on the Rust code changes only to fix bugs that
   break its use as the reference. New features go to Go only.
 - **Removal is top-down or all at once.** Rust crates can't be deleted one by one from the bottom, because the Rust
   apps link all of them. Two exits, both safe:
@@ -58,13 +62,13 @@ internal/
   docx/                L2    OOXML read/write, encryption    (crates/docx)
   docbin/              L2    .doc reader                     (crates/docbin)
   formats/             L2    txt md html rtf odt tex sheets  (crates/formats)
-  metafile/            L2    WMF/EMF                         (crates/metafile)
-  cfb/                 L2    compound file read+write        (new: Rust used the `cfb` crate)
+  metafile/            L1    WMF/EMF                         (crates/metafile)
+  cfb/                 L0*   compound file read+write        (new: Rust used the `cfb` crate)
   render/              L3    rasteriser                      (crates/render)
   pdf/                 L3    PDF writer                      (crates/pdf + craft-pdf)
   engine/              L4    Session, undo, commands, I/O    (crates/engine)
-  zotero/              L4                                    (crates/zotero)
-  controlkey/          L4                                    (crates/control-key)
+  zotero/              L5                                    (crates/zotero)
+  controlkey/          L0*                                   (crates/control-key)
   mcp/                 L5                                    (crates/mcp)
   ui/                  L6    front end                       (crates/ui-egui)
   platform/            L6    per-OS integration              (objc2 / windows / zbus code in apps + ui)
@@ -72,6 +76,10 @@ internal/
 tools/
   ci/                        Go counterpart of `cargo xtask ci` (gofmt, vet, staticcheck, tests, layers, assets, wasm)
 ```
+
+Layers follow the Rust gate's table (`xtask/src/layers.rs`), checked 2026-10-20: `metafile` is L1 and `zotero` L5; L0\*
+marks *standalone* units, which import no other unit. A unit may import only strictly lower layers, except that
+`fonts` may import `doc` (the Rust `INTRA_LAYER_ORDER`); `rustref` is test-only. `tools/ci layers` enforces this.
 
 `internal/` is used because WordCraft is an application. A package can be promoted to a public API later without
 changing its import path inside the module. The layering rule (a package imports only lower layers, and nothing
@@ -103,7 +111,7 @@ Sizes are lines including in-file tests, at the baseline. The test count is the 
 | `apps/wordcraft-cli` | 1.8k | `convert info text inspect render run commands parity mcp zotero` | `cmd/wordcraft-cli` | Port with identical flags and output | Low |
 | `apps/wordcraft-web` | 0.9k | eframe web runner, IndexedDB, clipboard, downloads | `cmd/wordcraft-web` | Rewrite with `syscall/js` + toolkit wasm backend; `wasm_exec.js` comes from `$GOROOT/lib/wasm` | High |
 | `xtask` | 1.4k | ci, layers, assets, parity, wasm, stats, visual diff, icons | `tools/ci` | Port the gates; `parity` regenerates `docs/parity-checklist.md` from the Go catalog | Low–medium |
-| git deps `craft-pdf`, `craft-ui`, `craft-print` (storytold/craft-libs) | n/a | PDF backend, shared UI pieces, native printing | `internal/pdf`, `internal/ui`, `internal/platform/print` | Reimplement. Their licence must be checked before porting any of their code (§11) | High |
+| git deps `craft-pdf` (+ krilla), `craft-ui`, `craft-print` (craft-libs) | n/a | PDF backend, shared UI pieces, native printing | `github.com/computernut43/craft-libs/{pdf/write,ui,print}`, used by `internal/pdf`, `internal/ui`, `internal/platform` | Ported in the craft-libs fork (its milestones C2, C4, C5); licence `MIT OR Apache-2.0` | High |
 
 ## 4. Library decisions
 
@@ -304,7 +312,7 @@ The project's standards are carried over and translated into Go terms. M0 writes
 2. **Port the tests.** The Rust unit, round-trip and hostile-input tests are ported alongside the code. The baseline has
    3,490 `#[test]` functions plus property tests; the parity table counts how many have been ported per package.
 3. **Compare with the frozen Rust app (differential tests).** `internal/rustref` (test-only) runs the baseline `wordcraft-cli`
-   built from `rust-baseline`:
+   built from the baseline commit:
    - Model: `wordcraft-cli convert in.<ext> out.json` against Go's JSON for the same input, compared after
      normalising (key order, float formatting). This works because Rust's `Document` is fully serde-serialisable and `json`
      is a supported format.
@@ -334,7 +342,7 @@ cutover.
 
 | # | Milestone | Contents | Exit criteria |
 |---|---|---|---|
-| M0 | Groundwork | `go.mod` (`go 1.26`, `toolchain go1.27.3`); `tools/ci` (fmt, vet, staticcheck, test, layers, assets, wasm, govulncheck, licences, no-panic analyzer); GitHub Actions job for Go; `CLAUDE.md`/`AGENTS.md` updated for two languages; `rust-baseline` tag; `internal/rustref` harness | `tools/ci` green on an empty module; Rust CLI builds from the tag and runs as the reference |
+| M0 ✓ | Groundwork | `go.mod` (`go 1.26`, `toolchain go1.27.3`); `tools/ci` (fmt, vet, staticcheck, test, layers, assets, wasm, govulncheck, licences, no-panic analyzer); GitHub Actions job for Go; `CLAUDE.md`/`AGENTS.md` updated for two languages; baseline pinned by SHA; `internal/rustref` harness | `tools/ci` green on an empty module; Rust CLI builds from the baseline and runs as the reference |
 | M1 | **Vertical slice** | `geom` (full); `doc` subset (Document, Paragraph, Run, a CharProps/ParaProps subset, JSON-compatible); `docx` subset reader/writer (body paragraphs and runs; other parts passed through; **saving refuses** documents with unsupported elements rather than dropping them); `engine` core (`Session`, registry, `Run` with recover + snapshot undo) with `text.insert` and `format.bold`; minimal CLI `convert`/`run` | Ported tests pass; JSON matches the Rust reference on the slice fixtures; Rust reopens a Go-saved file with identical JSON; fuzzers run for 10 min with no crash; wasm build passes |
 | M2 | Complete model | All of `internal/doc` and the JSON format | JSON round-trip identical to Rust on the full fixture corpus |
 | M3 | DOCX complete | Reader/writer, Strict, Flat/2003 XML, glossary, content controls, charts/SmartArt data, encryption, `internal/cfb` writer | Ported `crates/docx/tests/*` pass; differential tests on the corpus |
@@ -365,7 +373,7 @@ strongest. Layout, render and UI come later, after the model is proven.
    `text.insert`, `format.bold`, `edit.undo`, `edit.redo`, with behaviour taken from the Rust code and tests. (Seen on
    the Rust reference: `format.bold` sets both `bold` and `boldCs`.)
 5. `cmd/wordcraft-cli`: `convert in.docx out.docx|out.json` and `run --file … --cmd … --save …`.
-6. Tests: ported unit tests; round-trips; differential checks against `wordcraft-cli` built from `rust-baseline`; fuzz targets for
+6. Tests: ported unit tests; round-trips; differential checks against `wordcraft-cli` built from the baseline commit; fuzz targets for
    the reader and for `Run` with junk params; wasm build.
 
 ## 11. Known risks and open items
@@ -379,7 +387,8 @@ strongest. Layout, render and UI come later, after the model is proven.
 | Implicit panics in Go | Crash = lost work | §7 defence in layers; fuzzing; recover at boundaries |
 | Copy-on-write discipline isn't compiler-checked | Undo corruption | Snapshot hashing checker in tests; small, reviewed mutation API in `internal/doc` |
 | No Go WOFF2 decoder, no OpenType MATH table parser | User web fonts and equations | Write them (both are public specs); Brotli via `github.com/andybalholm/brotli` v1.2.6 (MIT, released 2026-09) |
-| `craft-libs` (craft-pdf, craft-ui, craft-print) | Unknown licence of those sources in this session | **Owner to confirm** the licence of `storytold/craft-libs` before any of its code is ported; otherwise reimplement from public specs (planned anyway) |
+| `craft-libs` (craft-pdf, craft-ui, craft-print) | Resolved 2026-10-20: the owner forked it to `computernut43/craft-libs`; licence `MIT OR Apache-2.0` (krilla and hayro too) | Ported there in Go (its `MIGRATION.md`); WordCraft pins it by commit |
+| A non-Go `vendor/` directory in craft-libs (Rust krilla/hayro sources) makes the go command assume Go vendoring there | Plain `go build` fails inside craft-libs (verified) | Its `tools/ci` sets `GOFLAGS=-mod=mod`; modules that require craft-libs are unaffected (verified: WordCraft builds against it) |
 | 633 commands + 63k-line UI is most of the work | Schedule | Port by namespace with the catalog as the progress meter; UI is a rewrite against the same command ids |
 | The frozen Rust app may have bugs | The reference can be wrong | Differences are reviewed, not auto-accepted; a confirmed Rust bug is fixed in Go and noted in the parity row |
 | Docs drift (architecture doc said 85.6k lines / 433 commands; actual 272k lines incl. tests / 633 commands) | Wrong estimates | Numbers in this plan are measured from the source at the baseline; re-measure at each milestone |
@@ -388,4 +397,5 @@ strongest. Layout, render and UI come later, after the model is proven.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | M0 landed: Go module, `tools/ci` (shared gates from craft-libs + layers and assets ported from xtask), `internal/rustref` (checked against the real Rust CLI), Go workflow, agent instructions; craft-libs brought into scope; layer table corrected to the Rust gate's |
 | 2026-10-20 | major | First version: audit findings, owner decisions, library checks, checklist and milestones |
