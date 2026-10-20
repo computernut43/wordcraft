@@ -1,0 +1,11 @@
+[package]
+name = "doc-oracle"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+wordcraft-doc = { path = "../../../../crates/doc" }
+serde_json = "1"
+
+[workspace]
