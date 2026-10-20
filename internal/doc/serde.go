@@ -130,3 +130,45 @@ func dropSame[T any](dst **T, base *T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// readTuple reads a Rust tuple (or tuple variant) into elems: a sequence of exactly len(elems)
+// values.
+func readTuple(d serdejson.Decoder, elems ...any) error {
+	if d.Peek() != serdejson.KindArray {
+		return d.Fail(fmt.Sprintf("invalid type, expected a tuple of size %d", len(elems)))
+	}
+	n := 0
+	err := d.Array(func(i int) error {
+		if i >= len(elems) {
+			return d.Fail(fmt.Sprintf("trailing characters (expected a tuple of size %d)", len(elems)))
+		}
+		n = i + 1
+		return d.Decode(elems[i])
+	})
+	if err != nil {
+		return err
+	}
+	if n != len(elems) {
+		return d.Fail(fmt.Sprintf("invalid length %d, expected a tuple of size %d", n, len(elems)))
+	}
+	return nil
+}
+
+// tagged writes an internally tagged variant: {"tag": "name", fields…}, fields being a struct.
+func tagged(tag, name string, fields any) ([]byte, error) {
+	out := []byte(`{"` + tag + `":"` + name + `"`)
+	if fields == nil {
+		return append(out, '}'), nil
+	}
+	b, err := serdejson.MarshalCompact(fields)
+	if err != nil {
+		return nil, err
+	}
+	if len(b) < 2 || b[0] != '{' {
+		return nil, fmt.Errorf("doc: variant %s is not a struct", name)
+	}
+	if len(b) > 2 {
+		out = append(out, ',')
+	}
+	return append(out, b[1:]...), nil
+}

@@ -92,7 +92,7 @@ func TestPropsMatchRust(t *testing.T) {
 
 func readCounts(m map[byte]int) string {
 	var b strings.Builder
-	for _, op := range "cptrexkbdOMULFWEQBsgPCRKSXTNmAGIynahYHzZljw" {
+	for _, op := range "cptrexkbdOMULFWEQBsgPCRKSXTNmAGIynahYHzZljwoiu" {
 		b.WriteString(string(op) + "=" + strconv.Itoa(m[byte(op)]) + " ")
 	}
 	return b.String()
@@ -243,7 +243,7 @@ func propsAnswer(x []byte) string {
 		v = new(Table)
 	case 'h':
 		v = new(ContentControl)
-	case 'Y', 'H', 'z', 'Z', 'l', 'j', 'w':
+	case 'Y', 'H', 'z', 'Z', 'l', 'j', 'w', 'o', 'i', 'u':
 		return modelAnswer(op, js)
 	default:
 		return "BAD OP"
@@ -732,7 +732,8 @@ func (g *pgen) block() {
 	}
 	fields := []pfield{
 		req("text", func(g *pgen) { g.w(strconv.Quote(text)) }), req("runs", runs), dflt("props", (*pgen).paraProps),
-		dflt("mark", (*pgen).charProps),
+		dflt("mark", (*pgen).charProps), dflt("objects", func(g *pgen) { g.list((*pgen).inlineObject) }),
+		opt("section", (*pgen).sectionProps),
 	}
 	kind := `"para"`
 	if g.oops(10) {
@@ -912,7 +913,7 @@ func (g *pgen) document() {
 }
 
 func (g *pgen) input() []byte {
-	ops := "cccppptreexkbbbbddOMULFWEQBssgPCRKSXTNNmmAGIyynnaahhYYHzZZljjw"
+	ops := "cccppptreexkbbbbddOMULFWEQBssgPCRKSXTNNmmAGIyynnaahhYYHzZZljjwooooiiuu"
 	op := ops[g.rng.IntN(len(ops))]
 	g.b.WriteByte(op)
 	pair := func(f func(*pgen)) {

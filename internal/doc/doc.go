@@ -1,7 +1,7 @@
 // Package doc is the WordCraft document model: the Go port of crates/doc, growing in steps
 // (MIGRATION.md §6). Its JSON is the Rust model's serde JSON, read and written with serdejson as
 // serde reads and writes it: what the Rust app reads, this reads the same way, and both write it
-// back the same, byte for byte. Parts not typed yet are Raw (kept as read).
+// back the same, byte for byte.
 //
 // Text is UTF-8 and offsets are byte offsets on character boundaries, as in Rust; a run's Len
 // counts bytes of its paragraph's Text.
@@ -175,21 +175,21 @@ type Paragraph struct {
 	// Mark is the formatting of the paragraph mark (what typing into an empty paragraph gets).
 	Mark CharProps `json:"mark,omitzero" serde:"default"`
 	// Objects are the inline objects (pictures, fields, …), one per U+FFFC in Text, in order.
-	Objects Vec[Raw] `json:"objects,omitempty" serde:"default"`
+	Objects Vec[Object] `json:"objects,omitempty" serde:"default"`
 	// Section is set when this paragraph ends a section (OOXML keeps w:sectPr on the last
 	// paragraph).
-	Section *Raw `json:"section,omitempty" serde:"default"`
+	Section *SectionProps `json:"section,omitempty" serde:"default"`
 }
 
 // NewParagraph is an empty paragraph.
 func NewParagraph() *Paragraph { return &Paragraph{Runs: Vec[Run]{}} }
 
-// Clone copies the paragraph. Values behind pointers and Raw parts are never changed in place,
-// so they're shared.
+// Clone copies the paragraph. Values behind pointers and inline objects are never changed in
+// place, so they're shared.
 func (p *Paragraph) Clone() *Paragraph {
 	c := *p
 	c.Runs = append(Vec[Run](nil), p.Runs...)
-	c.Objects = append(Vec[Raw](nil), p.Objects...)
+	c.Objects = append(Vec[Object](nil), p.Objects...)
 	return &c
 }
 

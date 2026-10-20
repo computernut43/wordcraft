@@ -90,26 +90,9 @@ type Pair[A, B any] struct {
 
 // DecodeSerde reads a two-element sequence, as serde reads a tuple.
 func (p *Pair[A, B]) DecodeSerde(d serdejson.Decoder) error {
-	if d.Peek() != serdejson.KindArray {
-		return d.Fail("invalid type, expected a tuple of size 2")
-	}
 	var v Pair[A, B]
-	n := 0
-	err := d.Array(func(i int) error {
-		n = i + 1
-		switch i {
-		case 0:
-			return d.Decode(&v.A)
-		case 1:
-			return d.Decode(&v.B)
-		}
-		return d.Fail("trailing characters (expected a tuple of size 2)")
-	})
-	if err != nil {
+	if err := readTuple(d, &v.A, &v.B); err != nil {
 		return err
-	}
-	if n != 2 {
-		return d.Fail("invalid length " + strconv.Itoa(n) + ", expected a tuple of size 2")
 	}
 	*p = v
 	return nil

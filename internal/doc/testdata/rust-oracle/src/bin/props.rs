@@ -30,6 +30,14 @@
 // [Table, ops] and runs table edits and queries in order, writing each result and the table. w
 // takes a string and writes the id StyleSheet::empty().new_id gives it.
 //
+// Inline objects: o reads an InlineObject and writes it back. i takes [InlineObject, w, h, alt
+// text] and writes what its accessors give (is_drawing, frame, canvas_style, text_boxes,
+// is_marker, alt_text, is_decorative, is_floating, ink, as_note_separator, plain_text) and the
+// object after set_size(w, h), and after set_alt_text. u takes [text, a, b, c, corner, points]
+// and writes the lookups and small helpers of the drawing types (ids of charts, legends, SmartArt
+// layouts and colours, ink tools, dashes and wrap sides; corner_radius, ruby offsets, cap_alt,
+// wrap polygons; Float::effect_extent).
+//
 // A panic is answered PANIC.
 use std::io::{Read, Write};
 
@@ -41,9 +49,66 @@ use wordcraft_doc::numbering::{Counters, levels_for};
 use wordcraft_doc::props::TableLook;
 use wordcraft_doc::styles::{PartFormat, PartSet, TablePart};
 use wordcraft_doc::{
-    Block, BuildingBlock, Comment, ContentControl, CoreProps, CustomProp, Document, ListKind, Numbering, Part, Revision, Settings, Source,
+    Block, BuildingBlock, Comment, ContentControl, CoreProps, CustomProp, Document, InlineObject, ListKind, Numbering, Part, Revision, Settings, Source,
     Style, StyleSheet, Table, TextBody,
 };
+
+fn object_ops(mut o: InlineObject, w: f32, h: f32, alt: &str) -> String {
+    let looked = (
+        o.is_drawing(),
+        o.frame().map(|(w, h, f)| (w, h, f.clone())),
+        o.canvas_style().copied(),
+        o.text_boxes(),
+        o.is_marker(),
+        o.alt_text().to_string(),
+        o.is_decorative(),
+        o.is_floating(),
+        o.ink().cloned(),
+        o.as_note_separator(),
+        o.plain_text().to_string(),
+        o.text_box(),
+        o.is_canvas(),
+    );
+    let mut sized = o.clone();
+    sized.set_size(w, h);
+    let set = o.set_alt_text(alt);
+    show(&(looked, sized, set, o))
+}
+
+fn helpers(s: &str, a: f32, b: f32, c: f32, corner: Option<u32>, pts: Vec<(i64, i64)>) -> String {
+    use wordcraft_doc::chart::{ChartType, LegendPos};
+    use wordcraft_doc::connector::corner_radius;
+    use wordcraft_doc::freeform::InkTool;
+    use wordcraft_doc::line_dash::LineDash;
+    use wordcraft_doc::para::{Float, PTabAlign, PTabBase, RubyAlign, WrapText, cap_alt, ruby_offset, ruby_raise};
+    use wordcraft_doc::smart_art::{SmartArtColors, SmartArtLayout};
+    use wordcraft_doc::wrap::WrapPolygon;
+    let ids = (
+        ChartType::from_id(s).map(|t| (t, t.id(), t.label(), t.is_round())),
+        LegendPos::from_id(s).map(|p| (p, p.id())),
+        SmartArtLayout::from_id(s).map(|l| (l, l.id(), l.label(), l.category(), l.description())),
+        SmartArtColors::from_id(s).map(|c| (c, c.id(), c.label(), c.accent(a as usize))),
+        InkTool::parse(s).map(|t| (t, t.name(), t.default_color(), t.default_width(), t.alpha())),
+        (LineDash::from_ooxml(s), LineDash::from_ooxml(s).ooxml(), LineDash::from_ooxml(s).is_solid()),
+        WrapText::from_ooxml(s).map(|w| (w, w.ooxml())),
+        PTabAlign::from_ooxml(s),
+        PTabBase::from_ooxml(s),
+        RubyAlign::from_ooxml(s).map(|r| (r, r.ooxml())),
+    );
+    let float = Float { effect: [a, b, c, -a], ..Float::default() };
+    let unit: Vec<(f32, f32)> = pts.iter().map(|&(x, y)| (x as f32 / 1000.0, y as f32 / 1000.0)).collect();
+    let numbers = (
+        corner_radius(corner, a, b),
+        ruby_offset(a, b, c),
+        ruby_raise(a, b, c),
+        cap_alt(s).chars().count(),
+        float.effect_extent(),
+        WrapPolygon::new(a > 0.0, pts.clone()),
+        WrapPolygon::from_unit(b > 0.0, &unit),
+        WrapPolygon::new(false, pts).map(|p| p.unit()),
+    );
+    show(&(ids, numbers))
+}
 
 fn compact<T: Serialize>(v: &T) -> String {
     serde_json::to_string(v).unwrap_or_else(|e| format!("SERIALIZE {e}"))
@@ -234,6 +299,15 @@ fn answer(op: u8, json: &[u8]) -> String {
         },
         b'j' => match serde_json::from_slice::<(Table, Vec<(u8, usize, usize, usize, usize)>)>(json) {
             Ok((t, ops)) => table_ops(t, ops),
+            Err(_) => "ERROR".into(),
+        },
+        b'o' => read::<InlineObject>(json),
+        b'i' => match serde_json::from_slice::<(InlineObject, f32, f32, String)>(json) {
+            Ok((o, w, h, alt)) => object_ops(o, w, h, &alt),
+            Err(_) => "ERROR".into(),
+        },
+        b'u' => match serde_json::from_slice::<(String, f32, f32, f32, Option<u32>, Vec<(i64, i64)>)>(json) {
+            Ok((s, a, b, c, corner, pts)) => helpers(&s, a, b, c, corner, pts),
             Err(_) => "ERROR".into(),
         },
         b'w' => match serde_json::from_slice::<String>(json) {

@@ -5,7 +5,6 @@ package doc
 // aren't reachable yet; the engine refuses commands that would need them.
 
 import (
-	"bytes"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -15,7 +14,7 @@ import (
 
 // Clone copies the document for an undo snapshot. Paragraphs are shared: every edit goes
 // through ParaMut, which replaces the paragraph with a copy first (copy on write), so a snapshot
-// never changes. Raw parts and maps are never changed in place.
+// never changes. Inline objects and maps are never changed in place.
 func (d *Document) Clone() *Document {
 	c := *d
 	c.Body = append(Vec[Block](nil), d.Body...)
@@ -266,16 +265,15 @@ func (d *Document) EnsureNonempty() {
 // BodyHasObject reports an inline object of the given type ("controlStart", "field", …) in a
 // body paragraph, at any depth of tables.
 func (d *Document) BodyHasObject(typ string) bool {
-	needle := []byte(`"type":"` + typ + `"`)
-	return blocksHaveObject(d.Body, needle)
+	return blocksHaveObject(d.Body, typ)
 }
 
-func blocksHaveObject(bl Vec[Block], needle []byte) bool {
+func blocksHaveObject(bl Vec[Block], typ string) bool {
 	for _, b := range bl {
 		if b.Table != nil {
 			for _, r := range b.Table.Rows {
 				for _, c := range r.Cells {
-					if blocksHaveObject(c.Blocks, needle) {
+					if blocksHaveObject(c.Blocks, typ) {
 						return true
 					}
 				}
@@ -286,7 +284,7 @@ func blocksHaveObject(bl Vec[Block], needle []byte) bool {
 			continue
 		}
 		for _, o := range b.Para.Objects {
-			if bytes.Contains(o, needle) {
+			if o.Type() == typ {
 				return true
 			}
 		}

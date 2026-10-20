@@ -2,6 +2,8 @@ package doc
 
 import (
 	"strconv"
+
+	"github.com/computernut43/craft-libs/rustcompat"
 	"strings"
 	"unicode/utf8"
 
@@ -207,6 +209,43 @@ func modelAnswer(op byte, js []byte) string {
 			out = append(out, compact(r))
 		}
 		return show([]any{out, t})
+	case 'o':
+		var o Object
+		if serdejson.Unmarshal(js, &o) != nil {
+			return "ERROR"
+		}
+		return show(o)
+	case 'i':
+		var o Object
+		var w, h F32
+		var alt string
+		if !readSeq(js, &o, &w, &h, &alt) {
+			return "ERROR"
+		}
+		var frame any
+		if fw, fh, f, ok := o.Frame(); ok {
+			frame = []any{fw, fh, f}
+		}
+		ink, okInk := o.Ink()
+		var inkV any
+		if okInk {
+			inkV = ink
+		}
+		tb, okTB := o.TextBox()
+		looked := []any{o.IsDrawing(), frame, optional(o.CanvasStyle()), append([]uint32{}, o.TextBoxes()...), o.IsMarker(), o.AltText(),
+			o.IsDecorative(), o.IsFloating(), inkV, optional(o.AsNoteSeparator()), o.PlainText(), optional(tb, okTB), o.IsCanvas()}
+		sized := o.WithSize(w, h)
+		withAlt, set := o.WithAltText(alt)
+		return show([]any{looked, sized, set, withAlt})
+	case 'u':
+		var str string
+		var a, b, c F32
+		var corner *uint32
+		var pts [][2]int64
+		if !readSeq(js, &str, &a, &b, &c, &corner, &pts) {
+			return "ERROR"
+		}
+		return show(helpersAnswer(str, a, b, c, corner, pts))
 	case 'w':
 		var s string
 		if serdejson.Unmarshal(js, &s) != nil {
@@ -216,6 +255,46 @@ func modelAnswer(op byte, js []byte) string {
 		return show(sheet.NewID(s))
 	}
 	return "BAD OP"
+}
+
+func helpersAnswer(s string, a, b, c F32, corner *uint32, pts [][2]int64) any {
+	var chart, legend, layout, colors, ink, wrapText, ruby any
+	if t, ok := ChartTypeFromID(s); ok {
+		chart = []any{t, t.ID(), t.Label(), t.IsRound()}
+	}
+	if p, ok := LegendPosFromID(s); ok {
+		legend = []any{p, p.ID()}
+	}
+	if l, ok := SmartArtLayoutFromID(s); ok {
+		layout = []any{l, l.ID(), l.Label(), l.Category(), l.Description()}
+	}
+	if col, ok := SmartArtColorsFromID(s); ok {
+		colors = []any{col, col.ID(), col.Label(), col.Accent(int(min(rustcompat.U64(a), uint64(maxInt))))}
+	}
+	if t, ok := ParseInkTool(s); ok {
+		ink = []any{t, t.Name(), t.DefaultColor(), t.DefaultWidth(), t.Alpha()}
+	}
+	if w, ok := WrapTextFromOOXML(s); ok {
+		wrapText = []any{w, w.OOXML()}
+	}
+	if r, ok := RubyAlignFromOOXML(s); ok {
+		ruby = []any{r, r.OOXML()}
+	}
+	dash := LineDashFromOOXML(s)
+	ids := []any{chart, legend, layout, colors, ink, []any{dash, optional(dash.OOXML()), dash.IsZero()}, wrapText,
+		optional(PTabAlignFromOOXML(s)), optional(PTabBaseFromOOXML(s)), ruby}
+	float := Float{Effect: [4]F32{a, b, c, -a}}
+	unit := make([][2]F32, len(pts))
+	for i, p := range pts {
+		unit[i] = [2]F32{F32(float32(p[0]) / 1000), F32(float32(p[1]) / 1000)}
+	}
+	var units any
+	if p, ok := NewWrapPolygon(false, pts); ok {
+		units = p.Unit()
+	}
+	numbers := []any{CornerRadius(corner, a, b), RubyOffset(a, b, c), RubyRaise(a, b, c), utf8.RuneCountInString(CapAlt(s)),
+		float.EffectExtent(), optional(NewWrapPolygon(a > 0, pts)), optional(WrapPolygonFromUnit(b > 0, unit)), units}
+	return []any{ids, numbers}
 }
 
 // DecodeSerde reads a numbering op [op, num, level, kind] (all present).
@@ -584,6 +663,33 @@ func (g *pgen) modelInput(op byte) {
 		g.w("]")
 	case 'w':
 		g.styleName()
+	case 'o':
+		g.inlineObject()
+	case 'i':
+		g.w("[")
+		g.inlineObject()
+		g.w(",")
+		g.f32()
+		g.w(",")
+		g.f32()
+		g.w(",")
+		g.str()
+		g.w("]")
+	case 'u':
+		g.w("[" + strconv.Quote(g.pick("column", " Bar ", "PIE", "colorful", "Accent 2", "accent-3", "basic process", "list", "Basic_Venn",
+			"pen", "PENCIL", "lgDash", "sysDot", "solid", "custom", "bothSides", "largest", "center", "indent", "rightVertical",
+			"distributeLetter", "", "x", strings.Repeat("é", 10001))) + ",")
+		g.f32()
+		g.w(",")
+		g.f32()
+		g.w(",")
+		g.f32()
+		g.w("," + g.pick("null", "0", "16000", "50000", "50001", "4294967295") + ",")
+		g.list(func(g *pgen) {
+			g.w("[" + g.pick("0", "1000", "-1000", "21600", "86401", "-9223372036854775808", "9223372036854775807") + "," +
+				g.pick("0", "500", "21600") + "]")
+		})
+		g.w("]")
 	}
 }
 
@@ -656,6 +762,303 @@ func modelEdgeInputs() [][]byte {
 		add('b', `{"kind":"table",`+js[1:])
 	}
 	add('b', `["table",{},[],[]]`)
+	eq := func(nodes string) string {
+		return `{"type":"equation","linear":"x","math":{"nodes":` + nodes + `,"omml":"<m/>"}}`
+	}
+	for _, n := range []string{`[{"t":"delim","beg":"(","end":")","elems":[[]]}]`, `[{"t":"delim","elems":[],"sep":"|","grow":false}]`,
+		`[{"t":"phant","e":[]}]`, `[{"t":"phant","show":false,"e":[{"t":"run","text":"a"}]}]`, `[]`, `[{"t":"run","text":"a","sty":"bold"}]`,
+		`[{"t":"nary","chr":"∑","e":[],"lim_loc":"subSup"}]`, `[{"t":"matrix","rows":[[[],[]]]}]`, `[{"t":"delim","beg":null,"end":"]","elems":[]}]`} {
+		add('o', eq(n))
+	}
+	add('o', `{"type":"equation","linear":"x","math":{"omml":"<m/>","jc":"left"}}`)
+	for _, js := range []string{`{"type":"group","w":10,"h":20,"ch_w":1,"ch_h":2,"children":[{"x":0,"y":0,"obj":{"type":"shape","kind":"textBox","w":1,"h":1,"fill":null,"stroke":null,"story":7}}],"canvas":{}}`,
+		`{"type":"group","w":10,"h":20,"ch_w":1,"ch_h":2,"children":[]}`, `{"type":"fieldEnd"}`, `{"type":"controlEnd","x":1}`, `["fieldEnd"]`, `["fieldEnd",1]`,
+		`{"type":"shape","kind":"freeform","w":1,"h":1,"fill":null,"stroke":null,"freeform":{"ink":"pen"},"float":{"wrap":"square","alt":{"decorative":true}}}`,
+		`{"type":"positionalTab"}`, `{"type":"opaque","format":"docx","xml":"<w:r><w:separator/></w:r>"}`} {
+		add('o', js)
+		add('i', `[`+js+`,5.0,6.0,"alt"]`)
+	}
+	for _, id := range []string{"LIST", "List", "basicList", "Basic List", "accent1", "ACCENT 6", "Colorful", " pie ", " bar　"} {
+		add('u', `[`+strconv.Quote(id)+`,2.5,1.0,0.5,null,[]]`)
+	}
 	add('d', `{"body":[{"kind":"table","grid":[],"rows":[{"cells":[{"blocks":[]}]}]}],"styles":{"styles":[]},"numbering":{"nums":[{}]}}`)
 	return out
+}
+
+// Inline object generators.
+
+func (g *pgen) float() {
+	f, b := (*pgen).f32, (*pgen).boolean
+	anchor := g.enumOf(anchorNames)
+	g.object([]pfield{
+		dflt("wrap", g.enumOf(wrapNames)), dflt("wrapText", g.enumOf(wrapTextNames)), dflt("hRel", anchor), dflt("vRel", anchor), dflt("x", f),
+		dflt("y", f), opt("hAlign", g.enumOf(floatAlignNames)), opt("vAlign", g.enumOf(floatAlignNames)), dflt("dist", f), dflt("distTop", f),
+		dflt("distBottom", f), dflt("effect", func(g *pgen) { g.four(f) }), dflt("rot", f), dflt("flipH", b), dflt("flipV", b),
+		opt("wrapPolygon", func(g *pgen) {
+			g.object([]pfield{dflt("edited", b), dflt("points", func(g *pgen) {
+				g.list(func(g *pgen) {
+					g.w("[" + g.pick("0", "21600", "-5", "2147483647", "-2147483648") + "," + g.pick("0", "1", "86400") + "]")
+				})
+			})})
+		}),
+		dflt("alt", func(g *pgen) {
+			g.object([]pfield{dflt("text", (*pgen).str), dflt("title", (*pgen).str), dflt("decorative", b)})
+		}),
+		dflt("hidden", b), dflt("outsideCell", b),
+	})
+}
+
+func (g *pgen) embedded() {
+	s := (*pgen).str
+	g.object([]pfield{req("xml", s), req("refs", func(g *pgen) {
+		g.list(func(g *pgen) {
+			g.object([]pfield{req("id", s), req("kind", s), req("target", s), req("external", (*pgen).boolean)})
+		})
+	})})
+}
+
+func (g *pgen) pathSeg() {
+	if g.oops(8) {
+		g.w(g.pick(`{"move":[1]}`, `{"move":[1,2,3]}`, `"move"`, `{"close":null,"line":[1,2]}`, `{"cubic":{"0":1}}`, `["line",[1,2]]`))
+		return
+	}
+	switch g.rng.IntN(5) {
+	case 0:
+		g.w(g.pick(`"close"`, `{"close":null}`))
+	case 1:
+		g.w(`{"cubic":[`)
+		for i := range 6 {
+			if i > 0 {
+				g.w(",")
+			}
+			g.f32()
+		}
+		g.w("]}")
+	default:
+		g.w(`{"` + g.pick("move", "line") + `":[`)
+		g.f32()
+		g.w(",")
+		g.f32()
+		g.w("]}")
+	}
+}
+
+func (g *pgen) taggedObject(tag, name string, fields []pfield) {
+	if g.oops(15) {
+		name = g.pick("Image", "bogus", "")
+	}
+	at := g.rng.IntN(len(fields) + 1)
+	t := req(tag, func(g *pgen) { g.w(`"` + name + `"`) })
+	g.object(append(append(append([]pfield(nil), fields[:at]...), t), fields[at:]...))
+}
+
+func (g *pgen) graphicItem() {
+	f, r := (*pgen).f32, (*pgen).rgb
+	rect := func(g *pgen) { g.four(f) }
+	switch g.rng.IntN(4) {
+	case 0:
+		g.taggedObject("type", "shape", []pfield{req("rect", rect), req("kind", g.enumOf(shapeKindNames)), opt("fill", r), opt("stroke", r),
+			dflt("stroke_width", f)})
+	case 1:
+		g.taggedObject("type", "path", []pfield{req("segs", func(g *pgen) { g.list((*pgen).pathSeg) }), opt("fill", r), opt("stroke", r),
+			dflt("stroke_width", f)})
+	case 2:
+		g.taggedObject("type", "text", []pfield{req("rect", rect), req("text", (*pgen).str), req("size", f), req("color", r),
+			dflt("bold", (*pgen).boolean), dflt("align", g.enumOf(textAlignNames)), opt("font", (*pgen).str)})
+	default:
+		g.taggedObject("type", "image", []pfield{req("rect", rect), req("media", (*pgen).str)})
+	}
+}
+
+func (g *pgen) graphic() {
+	s := (*pgen).str
+	chart := func(g *pgen) {
+		g.object([]pfield{req("type", g.enumOf(chartTypeNames)), dflt("categories", func(g *pgen) { g.list(s) }),
+			dflt("series", func(g *pgen) {
+				g.list(func(g *pgen) {
+					g.object([]pfield{req("name", s), dflt("values", func(g *pgen) {
+						g.list(func(g *pgen) { g.w(g.pick("null", "1", "1.5", "-0.0", "1e300", "12345678901234567890", "2.5e-308")) })
+					})})
+				})
+			}),
+			opt("title", s), opt("legend", g.enumOf(legendPosNames)), dflt("dataLabels", (*pgen).boolean)})
+	}
+	smart := func(g *pgen) {
+		g.object([]pfield{req("layout", g.enumOf(smartArtLayoutNames)), dflt("items", func(g *pgen) {
+			g.list(func(g *pgen) { g.object([]pfield{req("text", s), dflt("level", func(g *pgen) { g.uint(8) })}) })
+		}), dflt("colors", g.enumOf(smartArtColorsNames))})
+	}
+	g.object([]pfield{req("kind", g.enumOf(graphicKindNames)), dflt("items", func(g *pgen) { g.list((*pgen).graphicItem) }),
+		dflt("w", (*pgen).f32), dflt("h", (*pgen).f32), opt("source", (*pgen).embedded), opt("smartArt", smart), opt("chart", chart)})
+}
+
+func (g *pgen) freeform() {
+	f := (*pgen).f32
+	g.object([]pfield{dflt("w", f), dflt("h", f), dflt("paths", func(g *pgen) {
+		g.list(func(g *pgen) {
+			g.object([]pfield{dflt("pts", func(g *pgen) {
+				g.list(func(g *pgen) {
+					g.w("[")
+					g.f32()
+					g.w(",")
+					g.f32()
+					g.w("]")
+				})
+			}), dflt("closed", (*pgen).boolean)})
+		})
+	}), dflt("alpha", f), opt("ink", g.enumOf(inkToolNames)), opt("order", func(g *pgen) { g.uint(32) })})
+}
+
+func (g *pgen) shapeEffects() {
+	f, r := (*pgen).f32, (*pgen).rgb
+	g.object([]pfield{
+		opt("shadow", func(g *pgen) {
+			g.object([]pfield{dflt("color", r), dflt("transparency", f), dflt("blur", f), dflt("distance", f), dflt("angle", f),
+				dflt("rotWithShape", (*pgen).boolean)})
+		}),
+		opt("glow", func(g *pgen) { g.object([]pfield{dflt("color", r), dflt("size", f), dflt("transparency", f)}) }),
+		opt("softEdge", f),
+	})
+}
+
+func (g *pgen) shapeExtra() {
+	b := (*pgen).boolean
+	end := func(g *pgen) {
+		g.object([]pfield{req("id", func(g *pgen) { g.uint(32) }), req("site", func(g *pgen) { g.uint(32) })})
+	}
+	g.object([]pfield{
+		dflt("id", func(g *pgen) { g.uint(32) }), opt("warp", func(g *pgen) {
+			g.object([]pfield{req("preset", (*pgen).str), dflt("adj", func(g *pgen) {
+				g.pairList((*pgen).str, func(g *pgen) { g.w(g.pick("0", "-1", "9223372036854775807", "-9223372036854775808", "1.0")) })
+			})})
+		}),
+		opt("start", end), opt("end", end), dflt("arrowStart", b), dflt("arrowEnd", b), opt("corner", func(g *pgen) { g.uint(32) }),
+		dflt("dash", func(g *pgen) {
+			if g.chance(4) {
+				g.w(`{"custom":`)
+				g.pairList(func(g *pgen) { g.uint(32) }, func(g *pgen) { g.uint(32) })
+				g.w("}")
+				return
+			}
+			g.enum(lineDashNames[:len(lineDashNames)-1])
+		}),
+	})
+}
+
+func (g *pgen) mathArg() {
+	if g.depth > 5 {
+		g.w("[]")
+		return
+	}
+	g.list((*pgen).mathNode)
+}
+
+func (g *pgen) mathNode() {
+	a, b := (*pgen).mathArg, (*pgen).boolean
+	char := func(g *pgen) {
+		if g.oops(10) {
+			g.w(g.pick(`""`, `"ab"`, "8721"))
+			return
+		}
+		g.w(strconv.Quote(g.pick("∑", "∫", "(", ")", "|", "¯", "⏟", "x")))
+	}
+	args := func(g *pgen) { g.list(a) }
+	name := g.pick(mNodeNames...)
+	var fields []pfield
+	switch name {
+	case "run":
+		fields = []pfield{req("text", (*pgen).str), opt("sty", g.enumOf(mStyNames)), dflt("scr", g.enumOf(mScrNames)), dflt("nor", b),
+			dflt("lit", b), opt("size", (*pgen).f32), opt("color", (*pgen).rgb), opt("font", (*pgen).str), opt("brk", func(g *pgen) { g.uint(8) })}
+	case "frac":
+		fields = []pfield{dflt("kind", g.enumOf(fracKindNames)), req("num", a), req("den", a)}
+	case "script":
+		fields = []pfield{req("kind", g.enumOf(scriptKindNames)), req("base", a), dflt("sub", a), dflt("sup", a)}
+	case "rad":
+		fields = []pfield{dflt("deg", a), dflt("deg_hide", b), req("e", a)}
+	case "nary":
+		fields = []pfield{req("chr", char), opt("lim_loc", g.enumOf(limLocNames)), dflt("grow", b), dflt("sub_hide", b), dflt("sup_hide", b),
+			dflt("sub", a), dflt("sup", a), req("e", a)}
+	case "delim":
+		fields = []pfield{opt("beg", char), opt("end", char), opt("sep", char), dflt("grow", b), dflt("shp_match", b), req("elems", args)}
+	case "func":
+		fields = []pfield{req("name", a), req("e", a)}
+	case "lim":
+		fields = []pfield{req("upper", b), req("e", a), req("lim", a)}
+	case "acc":
+		fields = []pfield{req("chr", char), req("e", a)}
+	case "bar":
+		fields = []pfield{req("top", b), req("e", a)}
+	case "borderBox":
+		fields = []pfield{dflt("hide", func(g *pgen) { g.four(b) }), dflt("strike", func(g *pgen) { g.four(b) }), req("e", a)}
+	case "boxed":
+		fields = []pfield{req("e", a)}
+	case "groupChr":
+		fields = []pfield{req("chr", char), req("top", b), req("e", a)}
+	case "eqArr":
+		fields = []pfield{req("rows", args)}
+	case "matrix":
+		fields = []pfield{req("rows", func(g *pgen) { g.list(func(g *pgen) { g.list(a) }) }), dflt("col_jc", func(g *pgen) { g.list(g.enumOf(colJcNames)) })}
+	default:
+		fields = []pfield{dflt("show", b), dflt("zero_wid", b), dflt("zero_asc", b), dflt("zero_desc", b), req("e", a)}
+	}
+	g.taggedObject("t", name, fields)
+}
+
+func (g *pgen) inlineObject() {
+	s, b, f, u := (*pgen).str, (*pgen).boolean, (*pgen).f32, func(g *pgen) { g.uint(32) }
+	r := (*pgen).rgb
+	name := g.pick(objectTypes...)
+	var fields []pfield
+	switch name {
+	case "image":
+		fields = []pfield{req("media", s), req("w", f), req("h", f), dflt("alt", s), dflt("float", (*pgen).float),
+			dflt("crop", func(g *pgen) { g.four(f) }), opt("ole", (*pgen).embedded)}
+	case "graphic":
+		fields = []pfield{req("w", f), req("h", f), dflt("alt", s), dflt("float", (*pgen).float), req("graphic", (*pgen).graphic)}
+	case "shape":
+		fields = []pfield{req("kind", g.enumOf(shapeKindNames)), req("w", f), req("h", f), opt("fill", r), opt("stroke", r),
+			dflt("stroke_width", f), dflt("float", (*pgen).float), opt("story", u), opt("freeform", (*pgen).freeform),
+			dflt("effects", (*pgen).shapeEffects), dflt("extra", (*pgen).shapeExtra)}
+	case "group":
+		child := func(g *pgen) {
+			if g.depth > 3 {
+				g.w(`{"x":0,"y":0,"obj":{"type":"fieldEnd"}}`)
+				return
+			}
+			g.object([]pfield{req("x", f), req("y", f), req("obj", (*pgen).inlineObject)})
+		}
+		fields = []pfield{req("w", f), req("h", f), dflt("float", (*pgen).float), req("ch_w", f), req("ch_h", f),
+			req("children", func(g *pgen) { g.list(child) }), opt("canvas", func(g *pgen) {
+				g.object([]pfield{opt("fill", r), opt("stroke", r), dflt("strokeWidth", f)})
+			})}
+	case "field":
+		fields = []pfield{req("instr", s), dflt("result", s), dflt("locked", b), dflt("dirty", b), dflt("code", b), dflt("form", s)}
+	case "fieldStart":
+		fields = []pfield{req("instr", s), dflt("locked", b), dflt("dirty", b)}
+	case "controlStart":
+		fields = []pfield{req("control", (*pgen).contentControl)}
+	case "noteRef":
+		fields = []pfield{req("kind", g.enumOf(noteKindNames)), req("id", u), dflt("custom", s)}
+	case "bookmarkStart", "bookmarkEnd":
+		fields = []pfield{req("name", s)}
+	case "commentStart", "commentEnd", "permEnd":
+		fields = []pfield{req("id", u)}
+	case "permStart":
+		fields = []pfield{req("id", u), dflt("group", s), dflt("editor", s)}
+	case "equation":
+		fields = []pfield{req("linear", s), dflt("display", b), dflt("math", func(g *pgen) {
+			g.object([]pfield{dflt("nodes", (*pgen).mathArg), dflt("omml", s), dflt("jc", g.enumOf(mathJcNames)), dflt("linear", b)})
+		})}
+	case "ruby":
+		fields = []pfield{req("base", s), req("ruby", s), dflt("align", g.enumOf(rubyAlignNames)), req("size", f), req("raise", f),
+			dflt("base_size", f), dflt("lang", s), dflt("props", (*pgen).charProps)}
+	case "positionalTab":
+		fields = []pfield{dflt("align", g.enumOf(pTabAlignNames)), dflt("relative_to", g.enumOf(pTabBaseNames)),
+			dflt("leader", g.enumOf(tabLeaderNames))}
+	case "opaque":
+		fields = []pfield{req("format", func(g *pgen) { g.w(g.pick(`"docx"`, `"rtf"`)) }), req("xml", func(g *pgen) {
+			g.w(g.pick(`"<w:r><w:separator/></w:r>"`, `"<w:r><w:continuationSeparator/></w:r>"`, `"<x/>"`))
+		}), dflt("text", s)}
+	}
+	g.taggedObject("type", name, fields)
 }

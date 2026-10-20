@@ -135,3 +135,12 @@ func FuzzTableEdits(f *testing.F) {
 		}
 	})
 }
+
+func TestShapeKindKinds(t *testing.T) {
+	for k := ShapeRectangle; k <= ShapeCurvedConnector; k++ {
+		conn := k == ShapeStraightConnector || k == ShapeElbowConnector || k == ShapeCurvedConnector
+		if k.IsConnector() != conn || k.IsOpen() != (conn || k == ShapeLine) {
+			t.Errorf("%d", k)
+		}
+	}
+}

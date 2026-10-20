@@ -78,11 +78,11 @@ func TestDeleteKeepsFormattingForTheMark(t *testing.T) {
 
 func TestDeleteRemovesObjects(t *testing.T) {
 	p := para("a￼b￼c", Run{Len: len("a￼b￼c")})
-	p.Objects = Vec[Raw]{Raw(`{"n":1}`), Raw(`{"n":2}`)}
+	p.Objects = Vec[Object]{{BookmarkStart{"one"}}, {BookmarkStart{"two"}}}
 	if err := p.Delete(1, 1+3+1); err != nil { // the first object and "b"
 		t.Fatal(err)
 	}
-	if p.Text != "a￼c" || len(p.Objects) != 1 || string(p.Objects[0]) != `{"n":2}` {
+	if p.Text != "a￼c" || len(p.Objects) != 1 || p.Objects[0] != (Object{BookmarkStart{"two"}}) {
 		t.Fatalf("%q %s", p.Text, p.Objects)
 	}
 }
