@@ -209,7 +209,7 @@ for `verified` rows.
 ### File formats (open = `OPEN_EXTS`, save = `SAVE_EXTS` in `crates/engine/src/io.rs`)
 | Format | Open | Save | Rust source | Status |
 |---|---|---|---|---|
-| DOCX/DOCM/DOTX/DOTM (Transitional + Strict) | ✓ | ✓ | `crates/docx` | in progress (M1c). XML tree (`crates/docx/src/xml.rs` with quick-xml 0.41) **verified**: all 6 Rust tests ported, and 400,000 generated inputs (well-formed, malformed, mutated, UTF-16, BOMs, DTDs, namespace edge cases) give the same tree or the same failure as the Rust code itself (`TestXMLMatchesRust`, 200,000 in CI; mutation-checked); fuzzed (10.5M execs). Error wording differs from quick-xml's. Kept as in Rust: `ToXML` writes names as read, so a hostile name can make re-emitted kept content invalid XML |
+| DOCX/DOCM/DOTX/DOTM (Transitional + Strict) | ✓ | ✓ | `crates/docx` | in progress (M1c). XML tree (`crates/docx/src/xml.rs` with quick-xml 0.41) **verified**: all 6 Rust tests ported, and 400,000 generated inputs (well-formed, malformed, mutated, UTF-16, BOMs, DTDs, namespace edge cases) give the same tree or the same failure as the Rust code itself (`TestXMLMatchesRust`, 200,000 in CI; mutation-checked); fuzzed (10.5M execs). Error wording differs from quick-xml's. Kept as in Rust: `ToXML` writes names as read, so a hostile name can make re-emitted kept content invalid XML. Package access (`package.rs` with zip 3.0 and flate2 1.1.10/zlib-rs) **verified** for the ported parts (bounded zip reading, relationships, content types, `Resolve`/`Relative`, `ZipEntries`): our own zip reader (`zipread.go`) finds, opens and refuses archives as the zip crate does, because `archive/zip` disagrees on damaged ones; 30,000 generated archives (stored/deflated, ZIP64, prepended data, comments, repeated and CP437 names, NTFS/timestamp/Unicode/AES extra fields, encryption flags, bad CRCs, truncation, byte damage, tight size limits) give the same parts, relationships, content types and failures (`TestPackageMatchesRust`, also in CI; of 16 deliberate bugs, 14 are caught and 2 change no outcome); Rust tests ported; fuzzed (7.6M execs). Not ported yet: `EmbeddedManifest`, the glossary fingerprint and the passthrough keys (with the reader parts that use them). `ZipEntries` writes with `archive/zip` at its default deflate level, so bytes differ from Rust's output; what a reader gets back is the same |
 | Encrypted DOCX (agile) | ✓ | ✓ | `crates/docx/src/crypt.rs` | not started |
 | Flat OPC XML, Word 2003 XML | ✓ | ✓ | `crates/docx/src/{flat,wordml2003*}.rs` | not started |
 | DOC/DOT (Word 97–2003), XOR/RC4 encrypted | ✓ | | `crates/docbin` | not started |
@@ -397,6 +397,7 @@ strongest. Layout, render and UI come later, after the model is proven.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | M1c.2: `internal/docx` package access with a zip reader matching the zip crate, verified against `package.rs` |
 | 2026-10-20 | minor | M1c.1: `internal/docx` XML tree, verified against `crates/docx/src/xml.rs` |
 | 2026-10-20 | minor | M1b: `internal/engine` core (session, undo, registry, seven commands, JSON open/save) and `cmd/wordcraft-cli`, verified against the Rust CLI by random scripts |
 | 2026-10-20 | minor | M1a: `internal/doc` model with lossless JSON and paragraph edits, verified against Rust |

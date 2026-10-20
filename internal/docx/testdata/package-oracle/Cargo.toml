@@ -1,0 +1,19 @@
+[package]
+name = "package-oracle"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# The Rust reference for internal/docx's package access: crates/docx/src/package.rs and xml.rs
+# themselves (included by path, not copied) with the zip and quick-xml versions the baseline locks.
+[dependencies]
+quick-xml = "=0.41.0"
+zip = { version = "=3.0.0", default-features = false, features = ["deflate"] }
+# flate2 as the baseline app builds it: its default features plus the zlib-rs backend zip enables.
+flate2 = "=1.1.10"
+zlib-rs = "=0.6.8"
+log = "0.4"
+serde_json = "1"
+wordcraft-doc = { path = "../../../../crates/doc" }
+
+[workspace]
