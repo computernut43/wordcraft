@@ -1706,6 +1706,52 @@ func (g *docxGen) vmlWrap() {
 	}
 }
 
+// customProps is a docProps/custom.xml with random properties: simple and raw values, missing
+// names and values, other elements, and rarely more than are kept.
+func (g *docxGen) customProps() string {
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">`)
+	n := g.rng.IntN(6)
+	if g.chance(40) {
+		n = 10_005
+	}
+	for i := range n {
+		if n < 1000 && g.chance(10) {
+			b.WriteString(`<other name="x"><vt:lpwstr>o</vt:lpwstr></other>`)
+			continue
+		}
+		b.WriteString(`<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="` + strconv.Itoa(i+2) + `"`)
+		if !g.chance(10) {
+			b.WriteString(` name="` + xmlEsc(g.pick("ZOTERO_PREF_1", "Client", "", "a&b", "Ünïcødé")) + `"`)
+		}
+		b.WriteString(`>`)
+		if n > 1000 {
+			b.WriteString(`<vt:i4>` + strconv.Itoa(i) + `</vt:i4></property>`)
+			continue
+		}
+		switch g.rng.IntN(8) {
+		case 0:
+			// No value.
+		case 1:
+			b.WriteString(`<vt:vector size="2" baseType="lpstr"><vt:lpstr>a &amp; b</vt:lpstr><vt:lpstr attr="&quot;q&quot;" xmlnsish="2">c</vt:lpstr></vt:vector>`)
+		case 2:
+			b.WriteString(`<vt:blob>AAEC</vt:blob>`)
+		case 3:
+			k := g.pick("i4", "bool", "filetime", "r8", "clsid", "decimal")
+			b.WriteString(`<vt:` + k + `>` + textEsc(g.pick("42", "true", "2024-01-01T00:00:00Z", " 1.5 ", "{X}", "")) + `</vt:` + k + `>`)
+		case 4:
+			b.WriteString(`<vt:empty/>`)
+		case 5:
+			b.WriteString(`<vt:lpwstr>` + textEsc(g.pick("pref <data/>", "", "line\nbreak", strings.Repeat("z", 300))) + `</vt:lpwstr><vt:i4>9</vt:i4>`)
+		default:
+			b.WriteString(`<vt:lpwstr>` + textEsc(g.pick(textPool...)) + `<x xmlns:q="urn:q" q:a="1" xmlnsish="2">mixed</x>tail</vt:lpwstr>`)
+		}
+		b.WriteString(`</property>`)
+	}
+	b.WriteString(`</Properties>`)
+	return b.String()
+}
+
 // colorEl writes a DrawingML colour element with random modifiers.
 func (g *docxGen) colorEl() {
 	name := g.pick("a:srgbClr", "a:schemeClr", "a:sysClr", "a:prstClr", "a:hslClr", "a:srgbClr", "a:scrgbClr")
@@ -2615,6 +2661,41 @@ func randomDocx(rng *rand.Rand) []byte {
 			}
 		}
 	}
+	if g.chance(4) {
+		// A macro project and the parts it relates to.
+		add2 := func(kind, target string) {
+			docRels = append(docRels, relSpec{"rIdV" + strconv.Itoa(len(docRels)), kind, target, ""})
+		}
+		project := g.pick("vbaProject.bin", "vbaProject.bin", "missing.bin", "empty.bin", "macros/proj.bin")
+		add2("http://schemas.microsoft.com/office/2006/relationships/vbaProject", project)
+		files["word/vbaProject.bin"] = "\xd0\xcf\x11\xe0vba"
+		files["word/macros/proj.bin"] = "\xd0\xcf\x11\xe0proj"
+		// A project elsewhere relates to itself and to the usual project part.
+		files["word/macros/_rels/proj.bin.rels"] = relsXML([]relSpec{{"rIdP1", relBase + "x", "proj.bin", ""}, {"rIdP2", relBase + "x", "../vbaProject.bin", ""},
+			{"rIdP3", relBase + "x", "../vbaData.xml", ""}})
+		files["word/empty.bin"] = ""
+		var vrels []relSpec
+		for i, t := range []string{"vbaData.xml", "../customXml/sig.xml", "vbaProjectSignature.bin", "missing.xml", "VBADATA.xml", "_rels/x.rels", "vbaProject.bin", "", "a\tb", "/WORD/vbaData.xml"} {
+			if g.chance(2) {
+				kind := g.pick("http://schemas.microsoft.com/office/2006/relationships/wordVbaData", "http://schemas.microsoft.com/office/2006/relationships/vbaProjectSignature", "", "a\tb")
+				vrels = append(vrels, relSpec{"rIdW" + strconv.Itoa(i), kind, t, g.pick("", "", "External")})
+			}
+		}
+		if g.chance(3) {
+			// An external target that would name a part.
+			vrels = append(vrels, relSpec{"rIdWx", relBase + "x", "word/vbaData.xml", "External"})
+		}
+		if g.chance(10) {
+			for i := range 70 {
+				vrels = append(vrels, relSpec{"rIdM" + strconv.Itoa(i), "http://example.com/vbaPart", "vbaPart" + strconv.Itoa(i) + ".bin", ""})
+				files["word/vbaPart"+strconv.Itoa(i)+".bin"] = "p"
+			}
+		}
+		files["word/_rels/vbaProject.bin.rels"] = relsXML(vrels)
+		files["word/vbaData.xml"] = `<wne:vbaSuppData xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml"/>`
+		files["word/vbaProjectSignature.bin"] = "sig"
+		files["customXml/sig.xml"] = "<x/>"
+	}
 	if g.chance(g.exotic) {
 		add("customXml", "../customXml/item1.xml")
 		files["customXml/item1.xml"] = `<b:Sources xmlns:b="http://schemas.openxmlformats.org/officeDocument/2006/bibliography"/>`
@@ -2676,8 +2757,8 @@ func randomDocx(rng *rand.Rand) []byte {
 		files["docProps/thumbnail.jpeg"] = "\xff\xd8thumb"
 		rootRels = append(rootRels, relSpec{"rId4", "http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail", "docProps/thumbnail.jpeg", ""})
 	}
-	if g.chance(g.exotic) {
-		files["docProps/custom.xml"] = `<?xml version="1.0"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"/>`
+	if g.chance(3) {
+		files["docProps/custom.xml"] = g.customProps()
 		rootRels = append(rootRels, relSpec{"rId5", relBase + "custom-properties", "docProps/custom.xml", ""})
 	}
 	files["_rels/.rels"] = relsXML(rootRels)

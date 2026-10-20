@@ -49,6 +49,12 @@ const (
 	settingsOrig   = "wordcraft:settings.orig"
 	embeddedParts  = "wordcraft:embedded.parts"
 	unmodelledRoot = "wordcraft:unmodelled.roots"
+	// vbaProjectPart is where a macro project is kept (and written).
+	vbaProjectPart = "word/vbaProject.bin"
+	// vbaRelated lists the parts a macro project relates to: kind, path and content type per line.
+	vbaRelated = "wordcraft:vbaProject.related"
+	// maxVBARelated is the most VBA-related parts kept.
+	maxVBARelated = 64
 )
 
 // appKeptProps are the docProps/app.xml properties carried over from the file.
@@ -303,13 +309,17 @@ func readOpened(pkg *Package) (*doc.Document, error) {
 	}
 	if rel, ok := rootRels.ByType(RelCustom); ok {
 		if x, err := r.pkg.XML(rel.Target); err == nil && x != nil {
-			r.unported("custom document properties")
+			d.CustomProps = readCustomProps(x)
 		}
 	}
-	// A macro project rides along as opaque bytes. Not ported.
+	// A macro project and every part it relates to (VBA data, signatures…) ride along as opaque
+	// bytes, never parsed or run, so a .docm/.dotm saved again carries exactly what the file had.
+	// Only the relationships and content types are read.
 	if v, ok := part(RelVBAProject); ok {
 		if b, ok := pkg.Get(v); ok && len(b) > 0 {
-			r.unported("macro projects")
+			d.Passthrough = ensureMap(d.Passthrough)
+			d.Passthrough[vbaProjectPart] = slices.Clone(b)
+			r.readVBARelated(v)
 		}
 	}
 	for _, rel := range rels {
@@ -1982,4 +1992,52 @@ func standaloneXML(e *El) (string, bool) {
 		return "", false
 	}
 	return s.String(), true
+}
+
+// readVBARelated keeps the parts the VBA project at project relates to, with their relationship
+// types and content types (see vbaRelated). Parts outside word/, relationship parts, the project
+// itself and missing targets are skipped; at most maxVBARelated are kept.
+func (r *reader) readVBARelated(project string) {
+	types := r.types()
+	var manifest strings.Builder
+	kept := 0
+	for _, rel := range r.pkg.Rels(project) {
+		if rel.External {
+			continue
+		}
+		// Part names compare case-insensitively (OPC): /WORD/x names the part the writer stores
+		// as word/x.
+		path := rel.Target
+		if len(path) >= 5 && asciiEqualFold(path[:5], "word/") {
+			path = "word/" + path[5:]
+		}
+		ct, ok := types.Of(path)
+		if !ok {
+			ct = "application/octet-stream"
+		}
+		rest, inWord := strings.CutPrefix(path, "word/")
+		bad := func(f string) bool { return f == "" || strings.ContainsAny(f, "\t\r\n") }
+		usable := inWord && rest != "" && !(len(path) >= 5 && asciiEqualFold(path[len(path)-5:], ".rels")) &&
+			!asciiEqualFold(path, project) && !asciiEqualFold(path, vbaProjectPart) &&
+			!bad(rel.Kind) && !bad(path) && !bad(ct)
+		if !usable {
+			continue
+		}
+		b, ok := r.pkg.Get(path)
+		if !ok {
+			continue
+		}
+		if kept >= maxVBARelated {
+			break
+		}
+		kept++
+		manifest.WriteString(rel.Kind + "\t" + path + "\t" + ct + "\n")
+		r.doc.Passthrough = ensureMap(r.doc.Passthrough)
+		if _, ok := r.doc.Passthrough[path]; !ok {
+			r.doc.Passthrough[path] = slices.Clone(b)
+		}
+	}
+	if manifest.Len() > 0 {
+		r.doc.Passthrough[vbaRelated] = doc.Vec[uint8](manifest.String())
+	}
 }
