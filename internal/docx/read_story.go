@@ -1,8 +1,8 @@
 package docx
 
 // Stories: blocks, paragraphs, runs, fields, tables (Rust crates/docx/src/read/story.rs).
-// Drawings, VML, OLE objects, ink, equations and content controls aren't ported yet: meeting one
-// makes the read refuse the file.
+// Drawings, VML, OLE objects, ink and equations aren't ported yet: meeting one makes the read
+// refuse the file.
 
 import (
 	"math"
@@ -296,9 +296,7 @@ func (r *reader) readBlocks(sc *storyCtx, parent *El, rels Rels, out *doc.Vec[do
 				*out = append(*out, doc.Block{Table: t})
 			}
 		case "w:sdt":
-			if e.Child("w:sdtContent") != nil {
-				r.unported("content controls (w:sdt)")
-			}
+			r.readBlockSdt(sc, e, rels, out, depth)
 		case "w:customXml", "w:smartTag", "w:ins", "w:moveTo":
 			r.readBlocks(sc, e, rels, out, depth+1)
 		case "m:oMathPara", "m:oMath":
@@ -602,9 +600,30 @@ func (r *reader) readInline(sc *storyCtx, pb *paraBuilder, k *El, rels Rels, ctx
 			pb.pushObj(o, r.runPropsNone(ctx))
 		}
 	case "w:sdt":
-		if k.Child("w:sdtContent") != nil {
-			r.unported("content controls (w:sdt)")
+		c := k.Child("w:sdtContent")
+		if c == nil {
+			return
 		}
+		ctl := r.controlOf(k, false)
+		// The markers take the formatting of the content's first run (typing at the start of
+		// the content continues it).
+		props := r.runPropsNone(ctx)
+		if p := c.Find("w:rPr"); p != nil {
+			props = r.runProps(p, ctx)
+		}
+		at, k0 := pb.text.Len(), len(pb.objects)
+		pb.pushObj(doc.Object{InlineObject: doc.ControlStart{Control: ctl}}, props)
+		r.readInlineChildren(sc, pb, c, rels, ctx, depth+1)
+		if cs, ok := pb.objects[k0].InlineObject.(doc.ControlStart); ok && cs.Control.ShowingPlaceholder {
+			shown := strings.ReplaceAll(pb.text.String()[at:], string(doc.Obj), "")
+			cs.Control.PlaceholderText = placeholderOf(shown)
+			pb.objects[k0] = doc.Object{InlineObject: cs}
+		}
+		endProps := props
+		if n := len(pb.runs); n > 0 {
+			endProps = pb.runs[n-1].Props
+		}
+		pb.pushObj(doc.Object{InlineObject: doc.ControlEnd{}}, endProps)
 	case "w:smartTag", "w:customXml", "w:dir", "w:bdo":
 		r.readInlineChildren(sc, pb, k, rels, ctx, depth+1)
 	case "m:oMath", "m:oMathPara":
@@ -1142,7 +1161,7 @@ func (r *reader) readTable(sc *storyCtx, t *El, rels Rels, depth int) *doc.Table
 		}
 	}
 	var rows []wrapped
-	r.collect(t, "w:tr", &rows, 0)
+	r.collect(t, "w:tr", &rows, &doc.Vec[doc.ContentControl]{}, 0)
 	table.Rows = doc.Vec[doc.Row]{}
 	for i, tr := range rows {
 		if i >= doc.MaxRows {
@@ -1166,7 +1185,7 @@ func (r *reader) readTable(sc *storyCtx, t *El, rels Rels, depth int) *doc.Table
 			}
 		}
 		var tcs []wrapped
-		r.collect(tr.el, "w:tc", &tcs, 0)
+		r.collect(tr.el, "w:tc", &tcs, &doc.Vec[doc.ContentControl]{}, 0)
 		for j, tc := range tcs {
 			if j >= doc.MaxCols {
 				break
@@ -1209,22 +1228,112 @@ func (r *reader) readTable(sc *storyCtx, t *El, rels Rels, depth int) *doc.Table
 	return table
 }
 
-// collect gathers name children (rows, cells), looking through w:customXml wrappers (content
-// controls around rows and cells aren't ported yet).
-func (r *reader) collect(e *El, name string, out *[]wrapped, depth int) {
+// collect gathers name children (rows, cells), looking through w:sdt/w:customXml wrappers; each
+// with the content controls that open before it and how many close after it. pending holds
+// controls opened but not yet given to an element.
+func (r *reader) collect(e *El, name string, out *[]wrapped, pending *doc.Vec[doc.ContentControl], depth int) {
 	if depth > 8 {
 		return
 	}
 	for _, k := range e.Els() {
 		switch k.Name {
 		case name:
-			*out = append(*out, wrapped{el: k, wrap: doc.ControlWrap{Open: doc.Vec[doc.ContentControl]{}}})
+			open := *pending
+			if open == nil {
+				open = doc.Vec[doc.ContentControl]{}
+			}
+			*pending = nil
+			*out = append(*out, wrapped{el: k, wrap: doc.ControlWrap{Open: open}})
 		case "w:sdt":
-			if k.Child("w:sdtContent") != nil {
-				r.unported("content controls around rows or cells")
+			c := k.Child("w:sdtContent")
+			if c == nil {
+				continue
+			}
+			ctl := sdtPr(k.Child("w:sdtPr"), true)
+			ctl.EndPrXML = sdtEndPr(k.Child("w:sdtEndPr"))
+			before := len(*out)
+			*pending = append(*pending, ctl)
+			r.collect(c, name, out, pending, depth+1)
+			if n := len(*out); n > before {
+				if w := &(*out)[n-1].wrap; w.Close < math.MaxUint32 {
+					w.Close++
+				}
+			} else if n := len(*pending); n > 0 {
+				// Nothing inside: the control goes.
+				*pending = (*pending)[:n-1]
 			}
 		case "w:customXml":
-			r.collect(k, name, out, depth+1)
+			r.collect(k, name, out, pending, depth+1)
 		}
 	}
+}
+
+// controlOf is the content control a w:sdt describes, with its end properties and its run
+// properties.
+func (r *reader) controlOf(e *El, block bool) doc.ContentControl {
+	pr := e.Child("w:sdtPr")
+	ctl := sdtPr(pr, block)
+	ctl.EndPrXML = sdtEndPr(e.Child("w:sdtEndPr"))
+	if pr != nil {
+		if rp := pr.Child("w:rPr"); rp != nil {
+			ctl.RunProps = ptr(r.pc.RPr(rp))
+		}
+	}
+	return ctl
+}
+
+// placeholderOf is placeholder text as read from a control showing it: one line, bounded.
+func placeholderOf(s string) string {
+	var b strings.Builder
+	n := 0
+	for _, c := range s {
+		if n == doc.MaxControlText {
+			break
+		}
+		if c < 0x20 || 0x7F <= c && c <= 0x9F {
+			c = ' '
+		}
+		b.WriteRune(c)
+		n++
+	}
+	return rustcompat.Trim(b.String())
+}
+
+// readBlockSdt reads a block-level content control: its content's blocks, between a start marker
+// at the start of the first paragraph and an end marker at the end of the last (a table at either
+// end carries the control instead).
+func (r *reader) readBlockSdt(sc *storyCtx, e *El, rels Rels, out *doc.Vec[doc.Block], depth int) {
+	content := e.Child("w:sdtContent")
+	if content == nil {
+		return
+	}
+	ctl := r.controlOf(e, true)
+	inner := doc.Vec[doc.Block]{}
+	r.readBlocks(sc, content, rels, &inner, depth+1)
+	// A table of contents' control belongs to the TOC: the writer puts it back around the TOC
+	// field and its entries.
+	toc := ctl.Kind.Type == doc.GalleryControl && !ctl.Kind.List && ctl.Kind.Gallery == "Table of Contents"
+	if len(inner) == 0 || toc {
+		*out = append(*out, inner...)
+		return
+	}
+	if ctl.ShowingPlaceholder && inner[0].Para != nil {
+		ctl.PlaceholderText = placeholderOf(inner[0].Para.PlainText())
+	}
+	if p := inner[0].Para; p != nil {
+		_ = p.InsertObject(0, doc.Object{InlineObject: doc.ControlStart{Control: ctl}}, p.PropsOfChar(0))
+	} else if t := inner[0].Table; t != nil {
+		t.Controls.Open = append(doc.Vec[doc.ContentControl]{ctl}, t.Controls.Open...)
+	}
+	last := inner[len(inner)-1]
+	if p := last.Para; p != nil {
+		props := p.Mark
+		if n := len(p.Runs); n > 0 {
+			props = p.Runs[n-1].Props
+		}
+		_ = p.InsertObject(p.Len(), doc.Object{InlineObject: doc.ControlEnd{}}, props)
+	} else if t := last.Table; t != nil && t.Controls.Close < math.MaxUint32 {
+		t.Controls.Close++
+	}
+	*out = append(*out, inner...)
 }

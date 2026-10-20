@@ -262,6 +262,8 @@ type docxGen struct {
 	styles, nums, rels, hfRels, comments, notes, bookmarks []string
 	exotic                                                 int // 1 in exotic: a feature the Go reader refuses
 	chain                                                  bool
+	sdtContent                                             bool
+	sdtStack                                               []bool
 }
 
 func (g *docxGen) chance(n int) bool { return g.rng.IntN(n) == 0 }
@@ -785,8 +787,10 @@ func (g *docxGen) inline(depth int) {
 				g.b.WriteString(`<m:oMath><m:r><m:t>x</m:t></m:r></m:oMath>`)
 			}
 		case 18:
-			if g.chance(g.exotic) {
-				g.b.WriteString(`<w:sdt><w:sdtPr><w:alias w:val="c"/></w:sdtPr><w:sdtContent><w:r><w:t>c</w:t></w:r></w:sdtContent></w:sdt>`)
+			if depth < 3 {
+				g.sdtOpen()
+				g.inline(depth + 1)
+				g.sdtClose()
 			}
 		case 19:
 			g.leaf("w:proofErr", ga{"w:type", g.enum("spellStart", "spellEnd")})
@@ -938,6 +942,14 @@ func (g *docxGen) table(depth int) {
 		if wrap {
 			g.open("w:customXml", ga{"w:element", g.enum("row")})
 		}
+		if g.chance(10) {
+			g.sdtOpen()
+			g.sdtClose()
+		}
+		rowSdt := g.chance(8)
+		if rowSdt {
+			g.sdtOpen()
+		}
 		g.open("w:tr")
 		if g.chance(2) {
 			g.trPr()
@@ -946,14 +958,24 @@ func (g *docxGen) table(depth int) {
 			g.tblPr("w:tblPrEx")
 		}
 		for range g.rng.IntN(4) {
+			cellSdt := g.chance(8)
+			if cellSdt {
+				g.sdtOpen()
+			}
 			g.open("w:tc")
 			if g.chance(2) {
 				g.tcPr(true)
 			}
 			g.blocks(depth+1, 1+g.rng.IntN(2))
 			g.close("w:tc")
+			if cellSdt {
+				g.sdtClose()
+			}
 		}
 		g.close("w:tr")
+		if rowSdt {
+			g.sdtClose()
+		}
 		if wrap {
 			g.close("w:customXml")
 		}
@@ -996,8 +1018,19 @@ func (g *docxGen) blocks(depth, n int) {
 				g.close("mc:AlternateContent")
 			}
 		case 5:
-			if g.chance(g.exotic) {
-				g.b.WriteString(`<w:sdt><w:sdtContent><w:p/></w:sdtContent></w:sdt>`)
+			if depth < 2 && g.chance(3) {
+				g.sdtOpen()
+				g.sdtOpen()
+				g.table(depth + 1)
+				g.sdtClose()
+				g.para(depth + 1)
+				g.sdtClose()
+			} else if depth < 3 {
+				g.sdtOpen()
+				if !g.chance(8) {
+					g.blocks(depth+1, 1+g.rng.IntN(3))
+				}
+				g.sdtClose()
 			}
 		case 7:
 			g.special()
@@ -1009,6 +1042,87 @@ func (g *docxGen) blocks(depth, n int) {
 			g.para(depth)
 		}
 	}
+}
+
+// sdtOpen starts a content control (w:sdt with random properties and an end-properties
+// element) up to its w:sdtContent; sdtClose ends it. Sometimes the content is missing.
+func (g *docxGen) sdtOpen() {
+	g.open("w:sdt")
+	if !g.chance(6) {
+		g.open("w:sdtPr")
+		for range g.rng.IntN(5) {
+			switch g.rng.IntN(20) {
+			case 0:
+				g.rPr(false, true)
+			case 1:
+				g.leaf("w:alias", ga{"w:val", g.enum("Title", "", "a\x01b", "c1\u0085\u009fx", strings.Repeat("t", 1100))})
+			case 2:
+				g.leaf("w:tag", ga{"w:val", g.enum("tag1", "")})
+			case 3:
+				g.leaf("w:id", ga{"w:val", g.enum(" 12 ", "-5", "99999999999999999999", "x", "7")})
+			case 4:
+				g.leaf("w:lock", ga{"w:val", g.enum("sdtLocked", "contentLocked", "sdtContentLocked", "unlocked", "bogus")})
+			case 5:
+				g.b.WriteString(`<w:placeholder><w:docPart w:val="` + g.pick("DefaultPlaceholder_1", "", "\uFFFCx") + `"/></w:placeholder>`)
+			case 6, 7:
+				g.leaf(g.pick("w:temporary", "w:showingPlcHdr"), ga{"w:val", g.from(onOffPool)}, ga{"w14:val", g.from(onOffPool)})
+			case 8:
+				g.leaf(g.pick("w:richText", "w:picture", "w15:repeatingSectionItem", "w:citation", "w:equation"))
+			case 9:
+				g.leaf("w:text", ga{"w:multiLine", g.from(onOffPool)})
+			case 10:
+				g.b.WriteString(`<w14:checkbox><w14:checked w14:val="` + g.pick(onOffPool...) + `"/><w14:checkedState w14:val="` + g.pick(hexPool...) +
+					`" w14:font="` + g.pick("MS Gothic", "") + `"/><w14:uncheckedState w14:val="` + g.pick(append([]string{"FFFC", "fffc"}, hexPool...)...) + `"/></w14:checkbox>`)
+			case 11, 12:
+				name := g.pick("w:comboBox", "w:dropDownList")
+				g.open(name, ga{"w:lastValue", g.enum("a", "")})
+				for range g.rng.IntN(4) {
+					g.leaf("w:listItem", ga{"w:displayText", g.enum("One", "Two", "")}, ga{"w:value", g.enum("1", "2", "")})
+				}
+				g.close(name)
+			case 13:
+				g.open("w:date", ga{"w:fullDate", g.enum("2024-01-01T00:00:00Z", "")})
+				g.leaf("w:dateFormat", ga{"w:val", g.enum("M/d/yyyy", "")})
+				g.leaf("w:lid", ga{"w:val", g.enum("en-US")})
+				g.leaf("w:storeMappedDataAs", ga{"w:val", g.enum("dateTime")})
+				g.leaf("w:calendar", ga{"w:val", g.enum("gregorian")})
+				g.close("w:date")
+			case 14:
+				name := g.pick("w:docPartObj", "w:docPartList")
+				g.open(name)
+				g.leaf("w:docPartGallery", ga{"w:val", g.enum("Table of Contents", "Page Numbers (Bottom of Page)", "")})
+				g.leaf("w:docPartCategory", ga{"w:val", g.enum("General")})
+				g.leaf("w:docPartUnique", g.onOff()...)
+				g.close(name)
+			case 15:
+				g.b.WriteString(`<w15:repeatingSection><w15:sectionTitle ` + g.pick("w:val", "w15:val") + `="` + g.pick("Item", "") + `"/><w15:doNotAllowInsertDeleteSection w15:val="` + g.pick(onOffPool...) + `"/></w15:repeatingSection>`)
+			case 16:
+				g.leaf("w:dataBinding", ga{"w:xpath", g.enum("/root/x", strings.Repeat("x", 40_000))}, ga{"w:storeItemID", g.enum("{1}")})
+			default:
+				g.leaf(g.pick("w15:color", "w15:appearance", "w:bibliography"), ga{"w15:val", g.enum("FF0000", "hidden")})
+			}
+		}
+		g.close("w:sdtPr")
+	}
+	if g.chance(4) {
+		g.b.WriteString(`<w:sdtEndPr><w:rPr><w:b/></w:rPr></w:sdtEndPr>`)
+	}
+	g.sdtContent = !g.chance(12)
+	if g.sdtContent {
+		g.b.WriteString(`<w:sdtContent>`)
+	}
+	g.sdtStack = append(g.sdtStack, g.sdtContent)
+}
+
+func (g *docxGen) sdtClose() {
+	n := len(g.sdtStack)
+	if n > 0 && g.sdtStack[n-1] {
+		g.b.WriteString(`</w:sdtContent>`)
+	}
+	if n > 0 {
+		g.sdtStack = g.sdtStack[:n-1]
+	}
+	g.close("w:sdt")
 }
 
 // special writes block patterns random generation rarely makes: a move with both ends, enclosed
