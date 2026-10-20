@@ -106,6 +106,8 @@ jobs:
         env:
           WORDCRAFT_GEOM_RUST: ${{ github.workspace }}/internal/geom/testdata/rust-oracle/target/release/geom-oracle
           WORDCRAFT_DOC_RUST: ${{ github.workspace }}/internal/doc/testdata/rust-oracle/target/release/doc-oracle
+          WORDCRAFT_PROPS_RUST: ${{ github.workspace }}/internal/doc/testdata/rust-oracle/target/release/props
+          WORDCRAFT_PROPS_CASES: "100000"
           WORDCRAFT_CLI_SCRIPTS: "1000"
           WORDCRAFT_XML_RUST: ${{ github.workspace }}/internal/docx/testdata/xml-oracle/target/release/xml-oracle
           WORDCRAFT_XML_CASES: "200000"

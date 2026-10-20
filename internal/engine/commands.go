@@ -76,7 +76,7 @@ func textInsert(s *Session, p Params) (any, error) {
 		return nil, err
 	}
 	// Typed text is new: not a formatting change, not deleted; its direction is its own.
-	props.Extra.Delete("fmtChange", "rtl", "ins", "del")
+	props.FmtChange, props.RTL, props.Ins, props.Del = nil, nil, nil, nil
 	at := s.Sel.Focus
 	if part := strings.ReplaceAll(text, "\u000B", "\n"); part != "" {
 		at, err = s.Doc.InsertText(at, part, props)
@@ -106,10 +106,8 @@ func typingPreconditions(s *Session) error {
 	if strings.ContainsRune(para.Text, doc.Obj) {
 		return notPorted("typing in a paragraph with inline objects")
 	}
-	for k := range para.Extra {
-		if k != "section" {
-			return notPorted("typing in a paragraph with %q", k)
-		}
+	if len(para.Objects) > 0 {
+		return notPorted("typing in a paragraph with inline objects")
 	}
 	return nil
 }
@@ -136,60 +134,43 @@ func (s *Session) typingProps() doc.CharProps {
 	var c doc.CharProps
 	if para := s.Doc.ParaAt(a); para != nil && s.Pending == nil && !s.Sel.IsCollapsed() && a.Off < len(para.Text) {
 		// The selection is replaced, so the new text isn't part of a link or a note number.
-		c = para.PropsOfChar(a.Off).Clone()
-		if _, linked := c.Extra["link"]; linked {
-			c = unlinked(c)
-		}
+		c = para.PropsOfChar(a.Off).Unlinked()
 		if c.Style != nil && noteStyles[*c.Style] {
 			c.Style = nil
 		}
 	} else {
 		c = s.caretProps()
 	}
-	c.Extra.Delete("rtl")
+	c.RTL = nil
 	return c
 }
 
 // caretProps is the caret's formatting (Rust Session::caret_props).
 func (s *Session) caretProps() doc.CharProps {
 	if s.Pending != nil {
-		return s.Pending.Clone()
+		return *s.Pending
 	}
 	f := s.Sel.Focus
 	para := s.Doc.ParaAt(f)
 	if para == nil {
 		return doc.CharProps{}
 	}
-	props := para.PropsAt(f.Off)
-	link, linked := props.Extra["link"]
+	out := para.PropsAt(f.Off)
 	// Typed at either end of a hyperlink, text isn't part of it; only typing inside extends it.
 	inside := false
-	if linked && f.Off > 0 && f.Off < len(para.Text) {
-		other, ok := para.PropsOfChar(f.Off).Extra["link"]
-		inside = ok && string(other) == string(link)
+	if out.Link != nil && f.Off > 0 && f.Off < len(para.Text) {
+		other := para.PropsOfChar(f.Off).Link
+		inside = other != nil && *other == *out.Link
 	}
-	out := props.Clone()
-	if linked && !inside {
-		out = unlinked(out)
+	if !inside {
+		out = out.Unlinked()
 	}
 	// Text typed next to a symbol is in the text's font, not the symbol's.
-	out.Extra.Delete("symFont")
+	out = out.WithoutSymbol()
 	if out.Style != nil && noteStyles[*out.Style] {
 		out.Style = nil
 	}
 	return out
-}
-
-// unlinked drops the hyperlink and its Hyperlink style (Rust CharProps::unlinked).
-func unlinked(c doc.CharProps) doc.CharProps {
-	c = c.Clone()
-	if _, ok := c.Extra["link"]; ok {
-		c.Extra.Delete("link")
-		if c.Style != nil && *c.Style == "Hyperlink" {
-			c.Style = nil
-		}
-	}
-	return c
 }
 
 // deleteSelection deletes the selection (within one paragraph) and leaves a caret there.
@@ -215,7 +196,7 @@ func formatBold(s *Session, p Params) (any, error) {
 	if !ok {
 		return nil, notPorted("format.bold without \"value\" (toggling needs style resolution)")
 	}
-	set := func(c *doc.CharProps) { c.Bold, c.BoldCs = &on, &on }
+	set := func(c *doc.CharProps) { c.Bold, c.BoldCS = &on, &on }
 	a, b := s.Sel.Ordered()
 	if !a.Equal(b) {
 		if err := s.Doc.FormatRange(a, b, set); err != nil {

@@ -4,9 +4,9 @@ package engine
 // format (.json, .wcraft.json) is ported; other formats aren't yet.
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,8 +31,8 @@ func OpenBytes(name string, data []byte) (*doc.Document, error) {
 	if !isJSON(name) {
 		return nil, notPorted("opening %s files", strings.ToLower(filepath.Ext(name)))
 	}
-	var d doc.Document
-	if err := json.Unmarshal(data, &d); err != nil {
+	d, err := doc.Unmarshal(data)
+	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	d.NormalizeRuns()
@@ -42,7 +42,7 @@ func OpenBytes(name string, data []byte) (*doc.Document, error) {
 	if d.NeedsDateRefresh() {
 		return nil, notPorted("documents with DATE or TIME fields (opening refreshes them)")
 	}
-	return &d, nil
+	return d, nil
 }
 
 // Open reads and parses a document file.
@@ -67,7 +67,7 @@ func SaveBytes(path string, d *doc.Document) ([]byte, error) {
 	if !isJSON(path) {
 		return nil, notPorted("saving %s files", strings.ToLower(filepath.Ext(path)))
 	}
-	return json.MarshalIndent(d, "", "  ")
+	return d.Marshal()
 }
 
 // Save stamps the document's save metadata, as Word does on every save (Rust Session::stamp_save),
@@ -95,42 +95,21 @@ func (s *Session) Save(path string) error {
 // session shows it at 100%, saved as no zoom), the modified time, the creation time when there is
 // none, who modified it last and the revision count.
 func stampSave(d *doc.Document, author string, now time.Time) error {
-	var settings map[string]json.RawMessage
-	if d.Extra.Get("settings", &settings) {
-		delete(settings, "zoom")
-		raw, err := json.Marshal(settings)
+	if d.Settings != nil {
+		settings, err := d.Settings.WithoutKey("zoom")
 		if err != nil {
 			return err
 		}
-		d.Extra["settings"] = raw
+		d.Settings = settings
 	}
-	var core map[string]any
-	if !d.Extra.Get("core", &core) || core == nil {
-		core = map[string]any{}
+	c := &d.Core
+	c.Modified = now.UTC().Format("2006-01-02T15:04:05Z")
+	if c.Created == "" {
+		c.Created = c.Modified
 	}
-	for _, k := range []string{"title", "subject", "creator", "keywords", "description", "category", "lastModifiedBy", "created", "modified"} {
-		if _, ok := core[k].(string); !ok {
-			core[k] = ""
-		}
+	c.LastModifiedBy = author
+	if c.Revision < math.MaxUint32 {
+		c.Revision++
 	}
-	modified := now.UTC().Format("2006-01-02T15:04:05Z")
-	core["modified"] = modified
-	if core["created"] == "" {
-		core["created"] = modified
-	}
-	core["lastModifiedBy"] = author
-	rev, _ := core["revision"].(float64)
-	if rev < 0 || rev > 4294967295 {
-		rev = 0
-	}
-	core["revision"] = min(uint64(rev)+1, 4294967295)
-	raw, err := json.Marshal(core)
-	if err != nil {
-		return err
-	}
-	if d.Extra == nil {
-		d.Extra = doc.Extra{}
-	}
-	d.Extra["core"] = raw
 	return nil
 }

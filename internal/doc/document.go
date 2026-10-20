@@ -9,15 +9,17 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
+
+	"github.com/computernut43/craft-libs/serdejson"
 )
 
 // Clone copies the document for an undo snapshot. Paragraphs are shared: every edit goes
 // through ParaMut, which replaces the paragraph with a copy first (copy on write), so a snapshot
-// never changes. Extra values are immutable.
+// never changes. Raw parts and maps are never changed in place.
 func (d *Document) Clone() *Document {
-	c := &Document{Body: make([]Block, len(d.Body)), Extra: d.Extra.Clone()}
-	copy(c.Body, d.Body)
-	return c
+	c := *d
+	c.Body = append(Vec[Block](nil), d.Body...)
+	return &c
 }
 
 // topIndex is the body block a top-level path points at, or false.
@@ -161,8 +163,8 @@ func (d *Document) FormatRange(a, b Pos, f func(*CharProps)) error {
 		if to == len(para.Text) && (from == 0 || i != ia) {
 			style := para.Mark.Style
 			f(&para.Mark)
-			if _, linked := para.Mark.Extra["link"]; linked {
-				para.Mark.Extra.set("link", nil)
+			if para.Mark.Link != nil {
+				para.Mark.Link = nil
 				para.Mark.Style = nil
 				if style != nil && *style != "Hyperlink" {
 					para.Mark.Style = style
@@ -197,7 +199,7 @@ func (d *Document) EnsureNonempty() (ok bool) {
 		}
 	}
 	if !hasPara || (len(d.Body) > 0 && d.Body[len(d.Body)-1].Para == nil) {
-		d.Body = append(d.Body, Block{Para: &Paragraph{Runs: []Run{}}})
+		d.Body = append(d.Body, Block{Para: NewParagraph()})
 	}
 	return ok
 }
@@ -218,7 +220,7 @@ func (d *Document) needsUnmodelledRepair() bool {
 				Cells []rawBlocks `json:"cells"`
 			} `json:"rows"`
 		}
-		if json.Unmarshal(b.Raw, &t) != nil {
+		if !b.Table.Get(&t) {
 			return true
 		}
 		for _, r := range t.Rows {
@@ -230,7 +232,7 @@ func (d *Document) needsUnmodelledRepair() bool {
 		}
 	}
 	var parts map[string]rawBlocks
-	if d.Extra.Get("parts", &parts) {
+	if d.Parts.Get(&parts) {
 		for _, p := range parts {
 			if len(p.Blocks) == 0 {
 				return true
@@ -245,12 +247,16 @@ func (d *Document) needsUnmodelledRepair() bool {
 func (d *Document) BodyHasObject(typ string) bool {
 	needle := []byte(`"type":"` + typ + `"`)
 	for _, b := range d.Body {
-		raw := b.Raw
-		if b.Para != nil {
-			raw = b.Para.Extra["objects"]
+		if b.Para == nil {
+			if bytes.Contains(b.Table, needle) {
+				return true
+			}
+			continue
 		}
-		if bytes.Contains(raw, needle) {
-			return true
+		for _, o := range b.Para.Objects {
+			if bytes.Contains(o, needle) {
+				return true
+			}
 		}
 	}
 	return false
@@ -259,7 +265,7 @@ func (d *Document) BodyHasObject(typ string) bool {
 // NeedsDateRefresh reports an unlocked DATE or TIME field anywhere in the document: Rust
 // refreshes those on open, which isn't ported yet. (Other fields open as they are.)
 func (d *Document) NeedsDateRefresh() bool {
-	raw, err := json.Marshal(d)
+	raw, err := serdejson.MarshalCompact(d)
 	if err != nil {
 		return true
 	}

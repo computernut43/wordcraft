@@ -1,8 +1,8 @@
 # WordCraft: Rust → Go migration plan
 
-> **Status:** approved 2026-10-20; M0 done; M1 in progress (`geom` verified; document model M1a; engine core and CLI M1b) · **Created:** 2026-10-20 · **Rust baseline:** `9b4b948` (computernut43/wordcraft `main`)
+> **Status:** approved 2026-10-20; M0 done; M1 in progress (`geom` verified; document model typed and serde-exact, M1d.1; engine core and CLI M1b; DOCX XML and package M1c.1–2) · **Created:** 2026-10-20 · **Rust baseline:** `9b4b948` (computernut43/wordcraft `main`)
 >
-> This plan covers Phase 2 of the migration (planning). No Go code exists yet, and no Rust code is to be removed until
+> This plan covers the migration. Go code lands component by component; no Rust code is to be removed until
 > the matching Go code builds, passes its tests and has been reviewed (§9).
 
 ## 1. Goal and decisions so far
@@ -192,7 +192,7 @@ for `verified` rows.
 | Feature | Rust source | Status |
 |---|---|---|
 | Units, rects, measurement parsing | `crates/geom` | **verified**: all 11 Rust tests ported; 82,706 generated cases compared with the Rust crate bit for bit (`TestMatchesRust`): 82,611 identical, 95 rotations whose sine/cosine differ by one ULP (Rust calls the platform's `sinf`/`cosf`) with everything computed from them exact; fuzzed. Signed zeros of `min`/`max` follow Rust on x86-64 |
-| Document, paragraphs, runs, character/paragraph properties | `crates/doc/src/{lib,para,props}.rs` | in progress (M1a): `Document`, `Block`, `Paragraph`, `Run` and a first set of `CharProps`/`ParaProps` fields modelled; every other field kept verbatim (`Extra`). Paragraph edits (insert, delete, format, normalize, props at an offset) **verified**: 30,000 random edits identical to `crates/doc` (`TestMatchesRust`); fuzzed |
+| Document, paragraphs, runs, character/paragraph properties | `crates/doc/src/{lib,para,props}.rs` | in progress (M1d.1): read and written with craft-libs `serdejson` exactly as serde reads and writes them. **Typed and verified**: every type of `props.rs` (`CharProps`, `ParaProps`, `TableProps`, `RowProps`, `CellProps` and everything in them, with `CharProps` overlay/minus/unlinked/cleared/formatting/without_symbol/shown_font and `ParaProps`/`Borders` overlay), the run text effects of `wordart.rs`/`effects.rs` (data and overlay), `Anchor`/`FloatAlign`, `CoreProps`, `NoteSeparators`, media, `Paragraph`, `Run`, `Block`, `Document`: 100,117 generated inputs (valid values of every field, the other forms serde takes, single and double mistakes, the same values inside a block where serde reads them from Content, documents) give the same output byte for byte, or both refuse (`TestPropsMatchRust`, `testdata/rust-oracle` `props`); 16 of 16 planted bugs caught; the props.rs unit tests ported; fuzzed (`FuzzUnmarshal`). Paragraph edits (insert, delete, format, normalize, props at an offset) **verified**: 30,000 random edits identical to `crates/doc` (`TestMatchesRust`). **Not typed yet** (`Raw`: kept as read, checked only as JSON, so a non-canonical value there isn't normalised and a missing one isn't filled with Rust's default): tables, inline objects, a paragraph's section, and the document's `lastSection`, `parts`, `styles`, `numbering`, `comments`, `revisions`, `settings`, `sources`, `customProps`, `glossary`; a table given as a sequence is refused. Not ported: `TextFill`/`TextEffects` sanitizing, WordArt styles, text warps |
 | Tables (merges, row/cell props, nested) | `crates/doc/src/table.rs` | not started |
 | Sections, columns, page setup, line numbers, doc grid | `crates/doc/src/section.rs` | not started |
 | Styles, style resolution, themes | `crates/doc/src/{styles,resolve}.rs` | not started |
@@ -204,7 +204,7 @@ for `verified` rows.
 | Charts, SmartArt, WordArt, shapes, connectors, freeforms, ink | `crates/doc/src/{chart,smart_art,wordart,connector,freeform,graphic}.rs` | not started |
 | Content controls, legacy forms | `crates/doc/src/{control,legacy_form}.rs` | not started |
 | Edit primitives, bidi helpers, clusters | `crates/doc/src/{edit,bidi,cluster}.rs` | not started |
-| JSON document format (`.json`, `.wcraft.json`) wire-compatible with Rust | `serde` derives in `crates/doc` | **verified** for the documents tried: the Rust sample (and the sample saved as DOCX and reopened) reads and writes back unchanged, and Rust reads Go's output as it reads its own (`TestRustDocumentsRoundTrip`) |
+| JSON document format (`.json`, `.wcraft.json`) wire-compatible with Rust | `serde` derives in `crates/doc` | **verified** for the documents tried: the Rust sample (and the sample saved as DOCX and reopened) reads and writes back **byte for byte** as `serde_json::to_vec_pretty` writes it, and Rust reads Go's output as it reads its own (`TestRustDocumentsRoundTrip`); typed parts verified as above. Unknown fields are dropped and duplicate fields refused, as serde does |
 
 ### File formats (open = `OPEN_EXTS`, save = `SAVE_EXTS` in `crates/engine/src/io.rs`)
 | Format | Open | Save | Rust source | Status |
@@ -398,6 +398,7 @@ strongest. Layout, render and UI come later, after the model is proven.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | M1d.1: `internal/doc` typed with craft-libs `serdejson` (all of `props.rs`, run text effects, core properties, paragraphs, runs, blocks, documents); `Extra` replaced by `Raw` for the parts not typed yet; JSON output byte for byte as Rust's; verified by a new props reference program; doc oracle pinned to the baseline's serde and serde_json |
 | 2026-10-20 | minor | Linux builds of `wordcraft-cli` in CI |
 | 2026-10-20 | minor | M1c.2: `internal/docx` package access with a zip reader matching the zip crate, verified against `package.rs` |
 | 2026-10-20 | minor | M1c.1: `internal/docx` XML tree, verified against `crates/docx/src/xml.rs` |

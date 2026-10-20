@@ -1,12 +1,15 @@
 package doc
 
 import (
+	"bytes"
 	"encoding/json"
+	"math"
+	"reflect"
 	"strings"
 	"testing"
-)
 
-func ptr[T any](v T) *T { return &v }
+	"github.com/computernut43/craft-libs/serdejson"
+)
 
 func para(text string, runs ...Run) *Paragraph {
 	return &Paragraph{Text: text, Runs: runs}
@@ -59,8 +62,8 @@ func TestInsertSplitsAndMergesRuns(t *testing.T) {
 }
 
 func TestDeleteKeepsFormattingForTheMark(t *testing.T) {
-	p := para("abc", Run{Len: 3, Props: CharProps{Bold: ptr(true), Extra: Extra{"ins": json.RawMessage("7")}}})
-	p.Mark = CharProps{Extra: Extra{"del": json.RawMessage("2")}}
+	p := para("abc", Run{Len: 3, Props: CharProps{Bold: ptr(true), Ins: ptr(uint32(7))}})
+	p.Mark = CharProps{Del: ptr(uint32(2))}
 	if err := p.Delete(3, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -68,19 +71,19 @@ func TestDeleteKeepsFormattingForTheMark(t *testing.T) {
 	if p.Text != "" || len(p.Runs) != 0 || p.Mark.Bold == nil || !*p.Mark.Bold {
 		t.Fatalf("%+v", p)
 	}
-	if _, ok := p.Mark.Extra["ins"]; ok || string(p.Mark.Extra["del"]) != "2" {
-		t.Fatalf("mark revisions: %v", p.Mark.Extra)
+	if p.Mark.Ins != nil || p.Mark.Del == nil || *p.Mark.Del != 2 {
+		t.Fatalf("mark revisions: %+v", p.Mark)
 	}
 }
 
 func TestDeleteRemovesObjects(t *testing.T) {
 	p := para("a￼b￼c", Run{Len: len("a￼b￼c")})
-	p.Extra = Extra{"objects": json.RawMessage(`[{"n":1},{"n":2}]`)}
+	p.Objects = Vec[Raw]{Raw(`{"n":1}`), Raw(`{"n":2}`)}
 	if err := p.Delete(1, 1+3+1); err != nil { // the first object and "b"
 		t.Fatal(err)
 	}
-	if p.Text != "a￼c" || string(p.Extra["objects"]) != `[{"n":2}]` {
-		t.Fatalf("%q %s", p.Text, p.Extra["objects"])
+	if p.Text != "a￼c" || len(p.Objects) != 1 || string(p.Objects[0]) != `{"n":2}` {
+		t.Fatalf("%q %s", p.Text, p.Objects)
 	}
 }
 
@@ -127,47 +130,55 @@ func TestPropsAt(t *testing.T) {
 	}
 }
 
-func TestJSONRoundTripKeepsUnknownFields(t *testing.T) {
-	in := `{"body":[{"kind":"para","text":"Hi","runs":[{"len":2,"props":{"bold":true,"color":{"rgb":"FF0000"},"lang":"pl-PL"}}],` +
-		`"props":{"style":"Title","align":"center"},"mark":{"italic":false}},{"kind":"table","rows":[]}],` +
-		`"styles":{"x":1},"settings":{"trackChanges":false}}`
-	var d Document
-	if err := json.Unmarshal([]byte(in), &d); err != nil {
+// TestJSONReadsAsRust: a document reads and writes as serde does: typed fields normalised
+// (12 is the f32 12.0, a colour given as hex is written [r, g, b]) and in Rust's field order,
+// unknown fields dropped, parts not typed yet (tables, styles, settings) kept as read.
+func TestJSONReadsAsRust(t *testing.T) {
+	in := `{"styles":{"x":1},"body":[{"text":"Hi","runs":[{"len":2,"props":{"size":12,"bold":true,"color":"#ff0000","lang":"pl-PL","nope":1}}],` +
+		`"kind":"para","props":{"style":"Title","align":"center","lineSpacing":{"value":1.5,"rule":"multiple"}},"mark":{"italic":false}},` +
+		`{"kind":"table","rows":[], "x" : 1}],"settings":{"trackChanges":false},"unknown":[1]}`
+	d, err := Unmarshal([]byte(in))
+	if err != nil {
 		t.Fatal(err)
 	}
 	if len(d.Body) != 2 || d.Body[0].Para == nil || d.Body[1].Kind() != "table" || *d.Body[0].Para.Props.Style != "Title" {
 		t.Fatalf("%+v", d)
 	}
-	out, err := json.Marshal(d)
+	out, err := serdejson.MarshalCompact(d)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var a, b any
-	if json.Unmarshal([]byte(in), &a) != nil || json.Unmarshal(out, &b) != nil {
-		t.Fatal("json")
-	}
-	ja, _ := json.Marshal(a)
-	jb, _ := json.Marshal(b)
-	if string(ja) != string(jb) {
-		t.Fatalf("round trip changed the document:\n%s\n%s", ja, jb)
+	const want = `{"body":[{"kind":"para","text":"Hi","runs":[{"len":2,"props":{"size":12.0,"bold":true,"color":{"Rgb":[255,0,0]},"lang":"pl-PL"}}],` +
+		`"props":{"style":"Title","align":"center","lineSpacing":{"rule":"multiple","value":1.5}},"mark":{"italic":false}},` +
+		`{"kind":"table","rows":[],"x":1}],"styles":{"x":1},"settings":{"trackChanges":false},"core":{"title":"","subject":"","creator":"",` +
+		`"keywords":"","description":"","category":"","lastModifiedBy":"","created":"","modified":"","revision":0}}`
+	if string(out) != want {
+		t.Fatalf("got\n%s\nwant\n%s", out, want)
 	}
 }
 
 func TestJSONRefusesWhatRustRefuses(t *testing.T) {
 	for _, bad := range []string{
-		`{}`, `{"body":[{"text":"x","runs":[]}]}`, `{"body":[{"kind":"para","runs":[]}]}`,
-		`{"body":[{"kind":"para","text":"x"}]}`, `{"body":[{"kind":"para","text":"x","runs":[{"len":-1}]}]}`, `[]`,
+		`{"body":[{"text":"x","runs":[]}]}`, `{"body":[{"kind":"para","runs":[]}]}`, `{"body":[{"kind":"para","text":"x"}]}`,
+		`{"body":[{"kind":"para","text":"x","runs":[{"len":-1}]}]}`, `{"body":[],"body":[]}`, `{"body":[{"kind":"Para","text":"","runs":[]}]}`,
+		`{"body":[{"kind":"para","text":"","runs":[],"mark":{"color":{"rgb":"FF0000"}}}]}`, `{"core":{"revision":4294967296}}`,
 	} {
-		var d Document
-		if err := json.Unmarshal([]byte(bad), &d); err == nil {
+		if _, err := Unmarshal([]byte(bad)); err == nil {
 			t.Errorf("%s: want an error", bad)
+		}
+	}
+	// Rust's Document is #[serde(default)]: these are documents of one empty paragraph.
+	for _, ok := range []string{`{}`, `[]`} {
+		d, err := Unmarshal([]byte(ok))
+		if err != nil || len(d.Body) != 1 || d.Body[0].Para == nil || d.Body[0].Para.Text != "" {
+			t.Errorf("%s: %+v %v", ok, d, err)
 		}
 	}
 }
 
 func TestEmptyPropsAreLeftOut(t *testing.T) {
 	b, err := json.Marshal(Block{Para: para("", Run{Len: 0})})
-	if err != nil || string(b) != `{"kind":"para","runs":[{"len":0}],"text":""}` {
+	if err != nil || string(b) != `{"kind":"para","text":"","runs":[{"len":0}]}` {
 		t.Fatalf("%s %v", b, err)
 	}
 }
@@ -191,4 +202,56 @@ func FuzzParagraphEdits(f *testing.F) {
 			t.Fatalf("runs cover %d of %d bytes", total, len(p.Text))
 		}
 	})
+}
+
+// FuzzUnmarshal: any input either is refused or reads, writes back, and reads again to the same
+// document (unless an f32 read from Content overflowed to infinity: serde writes that as null,
+// which reads back differently in Rust too).
+func FuzzUnmarshal(f *testing.F) {
+	f.Add([]byte(`{"body":[{"kind":"para","text":"Hi","runs":[{"len":2,"props":{"size":12,"color":"#ff0000"}}],"props":{"lineSpacing":["exactly",3]}}]}`))
+	f.Add([]byte(`{"body":[{"kind":"table","rows":[]}],"core":{"revision":3},"media":{"a":[1,2]},"footnoteSeparators":{"separator":[]}}`))
+	f.Add([]byte(`[]`))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		d, err := Unmarshal(data)
+		if err != nil || hasNonFinite(reflect.ValueOf(d)) {
+			return
+		}
+		out, err := d.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		again, err := Unmarshal(out)
+		if err != nil {
+			t.Fatalf("%s doesn't read back: %v", out, err)
+		}
+		out2, err := again.Marshal()
+		if err != nil || !bytes.Equal(out, out2) {
+			t.Fatalf("not stable:\n%s\n%s", out, out2)
+		}
+	})
+}
+
+func hasNonFinite(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Float32, reflect.Float64:
+		return math.IsInf(v.Float(), 0) || math.IsNaN(v.Float())
+	case reflect.Pointer, reflect.Interface:
+		return !v.IsNil() && hasNonFinite(v.Elem())
+	case reflect.Struct:
+		for i := range v.NumField() {
+			if hasNonFinite(v.Field(i)) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			return false
+		}
+		for i := range v.Len() {
+			if hasNonFinite(v.Index(i)) {
+				return true
+			}
+		}
+	}
+	return false
 }

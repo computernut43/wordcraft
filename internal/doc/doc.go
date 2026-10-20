@@ -1,16 +1,17 @@
 // Package doc is the WordCraft document model: the Go port of crates/doc, growing in steps
-// (MIGRATION.md §6). Its JSON is the Rust model's serde JSON: a document the Rust app saved as
-// .json reads here and writes back unchanged, because fields not modelled yet are kept verbatim
-// (Extra).
+// (MIGRATION.md §6). Its JSON is the Rust model's serde JSON, read and written with serdejson as
+// serde reads and writes it: what the Rust app reads, this reads the same way, and both write it
+// back the same, byte for byte. Parts not typed yet are Raw (kept as read).
 //
 // Text is UTF-8 and offsets are byte offsets on character boundaries, as in Rust; a run's Len
 // counts bytes of its paragraph's Text.
 package doc
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/computernut43/craft-libs/serdejson"
 )
 
 // ErrorKind classifies model errors (Rust DocError).
@@ -45,302 +46,177 @@ func (e *Error) Error() string {
 
 func badOffset(off int) error { return &Error{Kind: BadOffset, Detail: fmt.Sprint(off)} }
 
-// Document is a whole document. Only the body is modelled so far; every other field (styles,
-// numbering, sections, parts, comments, settings, …) is kept in Extra.
+// Document is a whole document (crates/doc/src/lib.rs Document). The body, the core
+// properties, the note separators and the media are typed; the rest is Raw.
 type Document struct {
-	Body  []Block `json:"body"`
-	Extra Extra   `json:"-"`
+	Body               Vec[Block]         `json:"body"`
+	LastSection        Raw                `json:"lastSection,omitempty"`
+	Parts              Raw                `json:"parts,omitempty"`
+	Styles             Raw                `json:"styles,omitempty"`
+	Numbering          Raw                `json:"numbering,omitempty"`
+	Comments           Raw                `json:"comments,omitempty"`
+	Revisions          Raw                `json:"revisions,omitempty"`
+	Settings           Raw                `json:"settings,omitempty"`
+	Core               CoreProps          `json:"core"`
+	Sources            Raw                `json:"sources,omitempty"`
+	CustomProps        Raw                `json:"customProps,omitempty"`
+	FootnoteSeparators NoteSeparators     `json:"footnoteSeparators,omitzero"`
+	EndnoteSeparators  NoteSeparators     `json:"endnoteSeparators,omitzero"`
+	Media              StrMap[Vec[uint8]] `json:"media,omitempty"`
+	Passthrough        StrMap[Vec[uint8]] `json:"passthrough,omitempty"`
+	Glossary           Vec[Raw]           `json:"glossary,omitempty"`
 }
 
-type documentJSON struct {
-	Body []Block `json:"body"`
-}
+// StrMap is a Rust BTreeMap<String, V>.
+type StrMap[V any] = serdejson.StrMap[V]
 
-// UnmarshalJSON reads the Rust model's JSON.
-func (d *Document) UnmarshalJSON(data []byte) error {
-	var v documentJSON
-	extra, err := unmarshalWithExtra(data, &v)
-	if err != nil {
-		return err
+func (Document) SerdeDefault() {}
+
+// SetDefaults is the default of the typed fields (Rust Document::new): a body of one empty
+// paragraph. A Raw part a file leaves out stays out (Rust would fill in its default).
+func (d *Document) SetDefaults() { *d = Document{Body: Vec[Block]{{Para: NewParagraph()}}} }
+
+// Unmarshal reads a document as the Rust app reads its .json files (serde_json::from_slice).
+func Unmarshal(data []byte) (*Document, error) {
+	var d Document
+	if err := serdejson.Unmarshal(data, &d); err != nil {
+		return nil, err
 	}
-	if v.Body == nil {
-		return errors.New("doc: document has no body")
-	}
-	*d = Document{Body: v.Body, Extra: extra}
-	return nil
+	return &d, nil
 }
 
-// MarshalJSON writes the Rust model's JSON.
-func (d Document) MarshalJSON() ([]byte, error) {
-	v := documentJSON{Body: d.Body}
-	if v.Body == nil {
-		v.Body = []Block{}
-	}
-	return marshalWithExtra(&v, d.Extra)
-}
+// Marshal writes a document as the Rust app saves .json (serde_json::to_vec_pretty).
+func (d *Document) Marshal() ([]byte, error) { return serdejson.Marshal(d) }
 
-// Block is a paragraph or, not modelled yet, a table (kept as raw JSON).
+// Block is a paragraph or a table, written with its kind: {"kind": "para", …}. Tables aren't
+// typed yet.
 type Block struct {
 	Para *Paragraph
-	// Raw is the JSON of a block that isn't a paragraph.
-	Raw json.RawMessage
+	// Table is a table's fields (everything but the kind), as read.
+	Table Raw
 }
 
-// Kind is "para" or the raw block's kind ("table").
+var blockKinds = []string{"para", "table"}
+
+// Kind is "para" or "table".
 func (b Block) Kind() string {
 	if b.Para != nil {
 		return "para"
 	}
-	var k struct {
-		Kind string `json:"kind"`
-	}
-	_ = json.Unmarshal(b.Raw, &k)
-	return k.Kind
+	return "table"
 }
 
-// UnmarshalJSON reads {"kind": "para", …} or another kind.
-func (b *Block) UnmarshalJSON(data []byte) error {
-	var k struct {
-		Kind *string `json:"kind"`
-	}
-	if err := json.Unmarshal(data, &k); err != nil {
-		return err
-	}
-	if k.Kind == nil {
-		return errors.New("doc: block without a kind")
-	}
-	if *k.Kind == "para" {
-		var p Paragraph
-		if err := json.Unmarshal(data, &p); err != nil {
-			return err
-		}
-		delete(p.Extra, "kind")
-		if len(p.Extra) == 0 {
-			p.Extra = nil
-		}
-		*b = Block{Para: &p}
-		return nil
-	}
-	*b = Block{Raw: append(json.RawMessage(nil), data...)}
-	return nil
-}
-
-// MarshalJSON writes the block with its kind tag.
-func (b Block) MarshalJSON() ([]byte, error) {
-	if b.Para == nil {
-		if b.Raw == nil {
-			return nil, errors.New("doc: empty block")
-		}
-		return b.Raw, nil
-	}
-	p := *b.Para
-	p.Extra = p.Extra.Clone()
-	p.Extra.set("kind", json.RawMessage(`"para"`))
-	return json.Marshal(p)
-}
-
-// Paragraph is a paragraph: Text and the formatting Runs covering it. Objects, the section
-// break and other fields are in Extra.
-type Paragraph struct {
-	Text  string
-	Runs  []Run
-	Props ParaProps
-	// Mark is the formatting of the paragraph mark (what typing into an empty paragraph gets).
-	Mark  CharProps
-	Extra Extra
-}
-
-type paragraphJSON struct {
-	Text  string    `json:"text"`
-	Runs  []Run     `json:"runs"`
-	Props ParaProps `json:"props,omitzero"`
-	Mark  CharProps `json:"mark,omitzero"`
-}
-
-// UnmarshalJSON reads the Rust model's JSON (text and runs are required, as in Rust).
-func (p *Paragraph) UnmarshalJSON(data []byte) error {
-	var req struct {
-		Text *string          `json:"text"`
-		Runs *json.RawMessage `json:"runs"`
-	}
-	if err := json.Unmarshal(data, &req); err != nil {
-		return err
-	}
-	if req.Text == nil || req.Runs == nil {
-		return errors.New("doc: paragraph needs text and runs")
-	}
-	var v paragraphJSON
-	extra, err := unmarshalWithExtra(data, &v)
+// DecodeSerde reads serde's internally tagged form.
+func (b *Block) DecodeSerde(d serdejson.Decoder) error {
+	i, rest, err := d.Tagged("kind", blockKinds)
 	if err != nil {
 		return err
 	}
-	*p = Paragraph{Text: v.Text, Runs: v.Runs, Props: v.Props, Mark: v.Mark, Extra: extra}
+	if i == 0 {
+		p := new(Paragraph)
+		if err := rest.Decode(p); err != nil {
+			return err
+		}
+		*b = Block{Para: p}
+		return nil
+	}
+	if rest.Peek() != serdejson.KindObject {
+		return rest.Fail("a table given as a sequence is not ported yet")
+	}
+	var t Raw
+	if err := rest.Decode(&t); err != nil {
+		return err
+	}
+	*b = Block{Table: t}
 	return nil
 }
 
-// MarshalJSON writes the Rust model's JSON.
-func (p Paragraph) MarshalJSON() ([]byte, error) {
-	v := paragraphJSON{Text: p.Text, Runs: p.Runs, Props: p.Props, Mark: p.Mark}
-	if v.Runs == nil {
-		v.Runs = []Run{}
+// MarshalJSON writes the kind, then the block's fields.
+func (b Block) MarshalJSON() ([]byte, error) {
+	var fields []byte
+	if b.Para != nil {
+		var err error
+		if fields, err = serdejson.MarshalCompact(b.Para); err != nil {
+			return nil, err
+		}
+	} else {
+		fields = b.Table
 	}
-	return marshalWithExtra(&v, p.Extra)
+	if len(fields) < 2 || fields[0] != '{' {
+		return nil, errors.New("doc: empty block")
+	}
+	out := []byte(`{"kind":"` + b.Kind() + `"`)
+	if len(fields) > 2 {
+		out = append(out, ',')
+	}
+	return append(out, fields[1:]...), nil
 }
 
-// Clone is a deep copy (Extra values are immutable and shared).
+// Paragraph is a paragraph: Text and the formatting Runs covering it (crates/doc/src/para.rs).
+type Paragraph struct {
+	Text string   `json:"text"`
+	Runs Vec[Run] `json:"runs"`
+	// Props are the paragraph's formatting.
+	Props ParaProps `json:"props,omitzero" serde:"default"`
+	// Mark is the formatting of the paragraph mark (what typing into an empty paragraph gets).
+	Mark CharProps `json:"mark,omitzero" serde:"default"`
+	// Objects are the inline objects (pictures, fields, …), one per U+FFFC in Text, in order.
+	Objects Vec[Raw] `json:"objects,omitempty" serde:"default"`
+	// Section is set when this paragraph ends a section (OOXML keeps w:sectPr on the last
+	// paragraph).
+	Section *Raw `json:"section,omitempty" serde:"default"`
+}
+
+// NewParagraph is an empty paragraph.
+func NewParagraph() *Paragraph { return &Paragraph{Runs: Vec[Run]{}} }
+
+// Clone copies the paragraph. Values behind pointers and Raw parts are never changed in place,
+// so they're shared.
 func (p *Paragraph) Clone() *Paragraph {
 	c := *p
-	c.Runs = make([]Run, len(p.Runs))
-	for i, r := range p.Runs {
-		c.Runs[i] = Run{Len: r.Len, Props: r.Props.Clone()}
-	}
-	c.Props = p.Props.Clone()
-	c.Mark = p.Mark.Clone()
-	c.Extra = p.Extra.Clone()
+	c.Runs = append(Vec[Run](nil), p.Runs...)
+	c.Objects = append(Vec[Raw](nil), p.Objects...)
 	return &c
 }
 
 // Equal compares like Rust's PartialEq for Paragraph.
-func (p *Paragraph) Equal(o *Paragraph) bool {
-	if p.Text != o.Text || len(p.Runs) != len(o.Runs) || !p.Props.Equal(o.Props) || !p.Mark.Equal(o.Mark) || !p.Extra.Equal(o.Extra) {
-		return false
-	}
-	for i := range p.Runs {
-		if p.Runs[i].Len != o.Runs[i].Len || !p.Runs[i].Props.Equal(o.Runs[i].Props) {
-			return false
-		}
-	}
-	return true
-}
+func (p *Paragraph) Equal(o *Paragraph) bool { return equal(p, o) }
 
 // Run is a formatting run: Len bytes of text sharing Props.
 type Run struct {
 	Len   int
 	Props CharProps
+	// wide is the length as read when it doesn't fit an int (Rust's is a usize): Len is then the
+	// largest int, which normalising clamps to the text exactly as Rust clamps wide, and a run
+	// written back unchanged writes wide.
+	wide uint64
 }
 
-type runJSON struct {
-	Len   int       `json:"len"`
-	Props CharProps `json:"props,omitzero"`
+type runFields struct {
+	Len   uint64    `json:"len"`
+	Props CharProps `json:"props,omitzero" serde:"default"`
 }
 
-// UnmarshalJSON reads {"len": n, "props": {…}}; a negative length is refused (Rust: usize).
-func (r *Run) UnmarshalJSON(data []byte) error {
-	var v runJSON
-	if _, err := unmarshalWithExtra(data, &v); err != nil {
+// DecodeSerde reads {"len": n, "props": {…}}.
+func (r *Run) DecodeSerde(d serdejson.Decoder) error {
+	var v runFields
+	if err := d.Decode(&v); err != nil {
 		return err
 	}
-	if v.Len < 0 {
-		return errors.New("doc: negative run length")
+	*r = Run{Len: int(min(v.Len, uint64(maxInt))), Props: v.Props}
+	if v.Len > uint64(maxInt) {
+		r.wide = v.Len
 	}
-	*r = Run(v)
 	return nil
 }
 
-// MarshalJSON writes {"len": n, "props": {…}}.
-func (r Run) MarshalJSON() ([]byte, error) { return json.Marshal(runJSON(r)) }
-
-// CharProps is character formatting (direct or in a style); nil fields inherit. The fields not
-// modelled yet (underline, colour, revisions, links, …) are in Extra.
-type CharProps struct {
-	Style    *string  // character style id
-	Font     *string  // font name
-	Size     *float32 // points
-	Bold     *bool
-	BoldCs   *bool // complex-script bold
-	Italic   *bool
-	ItalicCs *bool
-	Extra    Extra
-}
-
-type charPropsJSON struct {
-	Style    *string  `json:"style,omitempty"`
-	Font     *string  `json:"font,omitempty"`
-	Size     *float32 `json:"size,omitempty"`
-	Bold     *bool    `json:"bold,omitempty"`
-	BoldCs   *bool    `json:"boldCs,omitempty"`
-	Italic   *bool    `json:"italic,omitempty"`
-	ItalicCs *bool    `json:"italicCs,omitempty"`
-}
-
-// UnmarshalJSON reads the Rust model's camelCase fields.
-func (c *CharProps) UnmarshalJSON(data []byte) error {
-	var v charPropsJSON
-	extra, err := unmarshalWithExtra(data, &v)
-	if err != nil {
-		return err
+// MarshalJSON writes {"len": n, "props": {…}}, leaving out empty props.
+func (r Run) MarshalJSON() ([]byte, error) {
+	n := uint64(max(r.Len, 0))
+	if r.wide != 0 && r.Len == maxInt {
+		n = r.wide
 	}
-	*c = CharProps{v.Style, v.Font, v.Size, v.Bold, v.BoldCs, v.Italic, v.ItalicCs, extra}
-	return nil
+	return serdejson.MarshalCompact(runFields{n, r.Props})
 }
 
-// MarshalJSON writes the Rust model's camelCase fields, leaving out unset ones.
-func (c CharProps) MarshalJSON() ([]byte, error) {
-	v := charPropsJSON{c.Style, c.Font, c.Size, c.Bold, c.BoldCs, c.Italic, c.ItalicCs}
-	return marshalWithExtra(&v, c.Extra)
-}
-
-// IsZero is Rust's is_empty: nothing set (so JSON leaves it out).
-func (c CharProps) IsZero() bool {
-	return c.Style == nil && c.Font == nil && c.Size == nil && c.Bold == nil && c.BoldCs == nil &&
-		c.Italic == nil && c.ItalicCs == nil && len(c.Extra) == 0
-}
-
-func eqPtr[T comparable](a, b *T) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
-
-func clonePtr[T any](p *T) *T {
-	if p == nil {
-		return nil
-	}
-	v := *p
-	return &v
-}
-
-// Equal compares like Rust's PartialEq.
-func (c CharProps) Equal(o CharProps) bool {
-	return eqPtr(c.Style, o.Style) && eqPtr(c.Font, o.Font) && eqPtr(c.Size, o.Size) && eqPtr(c.Bold, o.Bold) &&
-		eqPtr(c.BoldCs, o.BoldCs) && eqPtr(c.Italic, o.Italic) && eqPtr(c.ItalicCs, o.ItalicCs) && c.Extra.Equal(o.Extra)
-}
-
-// Clone is a deep copy.
-func (c CharProps) Clone() CharProps {
-	return CharProps{clonePtr(c.Style), clonePtr(c.Font), clonePtr(c.Size), clonePtr(c.Bold), clonePtr(c.BoldCs),
-		clonePtr(c.Italic), clonePtr(c.ItalicCs), c.Extra.Clone()}
-}
-
-// ParaProps is paragraph formatting. Only the style is modelled so far.
-type ParaProps struct {
-	Style *string // paragraph style id
-	Extra Extra
-}
-
-type paraPropsJSON struct {
-	Style *string `json:"style,omitempty"`
-}
-
-// UnmarshalJSON reads the Rust model's camelCase fields.
-func (p *ParaProps) UnmarshalJSON(data []byte) error {
-	var v paraPropsJSON
-	extra, err := unmarshalWithExtra(data, &v)
-	if err != nil {
-		return err
-	}
-	*p = ParaProps{Style: v.Style, Extra: extra}
-	return nil
-}
-
-// MarshalJSON writes the Rust model's camelCase fields.
-func (p ParaProps) MarshalJSON() ([]byte, error) {
-	return marshalWithExtra(&paraPropsJSON{Style: p.Style}, p.Extra)
-}
-
-// IsZero is Rust's is_empty.
-func (p ParaProps) IsZero() bool { return p.Style == nil && len(p.Extra) == 0 }
-
-// Equal compares like Rust's PartialEq.
-func (p ParaProps) Equal(o ParaProps) bool { return eqPtr(p.Style, o.Style) && p.Extra.Equal(o.Extra) }
-
-// Clone is a deep copy.
-func (p ParaProps) Clone() ParaProps {
-	return ParaProps{Style: clonePtr(p.Style), Extra: p.Extra.Clone()}
-}
+const maxInt = int(^uint(0) >> 1)

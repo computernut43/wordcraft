@@ -6,6 +6,8 @@ publish = false
 
 [dependencies]
 wordcraft-doc = { path = "../../../../crates/doc" }
-serde_json = "1"
+# The baseline workspace's versions (its Cargo.lock), so serde behaves as the app's does.
+serde_json = "=1.0.151"
+serde = "=1.0.229"
 
 [workspace]

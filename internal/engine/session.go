@@ -80,7 +80,7 @@ func clonePending(p *doc.CharProps) *doc.CharProps {
 	if p == nil {
 		return nil
 	}
-	c := p.Clone()
+	c := *p
 	return &c
 }
 
@@ -136,7 +136,7 @@ func (s *Session) protected() bool {
 	var settings struct {
 		Protection *string `json:"protection"`
 	}
-	return s.Doc.Extra.Get("settings", &settings) && settings.Protection != nil
+	return s.Doc.Settings.Get(&settings) && settings.Protection != nil
 }
 
 // trackChanges reports Track Changes on.
@@ -144,7 +144,7 @@ func (s *Session) trackChanges() bool {
 	var settings struct {
 		TrackChanges bool `json:"trackChanges"`
 	}
-	s.Doc.Extra.Get("settings", &settings)
+	s.Doc.Settings.Get(&settings)
 	return settings.TrackChanges
 }
 

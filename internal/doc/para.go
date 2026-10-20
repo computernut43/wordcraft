@@ -4,7 +4,6 @@ package doc
 // run_at, props_at, props_of_char, insert_text, insert_run, normalize, delete, format).
 
 import (
-	"encoding/json"
 	"strings"
 	"unicode/utf8"
 )
@@ -89,25 +88,6 @@ func (p *Paragraph) objectsBefore(off int) int {
 	return strings.Count(p.Text[:off], string(Obj))
 }
 
-// objects returns the inline objects (kept as JSON in Extra until they are modelled).
-func (p *Paragraph) objects() []json.RawMessage {
-	var objs []json.RawMessage
-	p.Extra.Get("objects", &objs)
-	return objs
-}
-
-func (p *Paragraph) setObjects(objs []json.RawMessage) {
-	if len(objs) == 0 {
-		p.Extra.set("objects", nil)
-		return
-	}
-	raw, err := json.Marshal(objs)
-	if err != nil {
-		return
-	}
-	p.Extra.set("objects", raw)
-}
-
 // InsertText inserts plain text (U+FFFC is dropped) at off with props and returns the number of
 // bytes inserted.
 func (p *Paragraph) InsertText(off int, s string, props CharProps) (int, error) {
@@ -119,7 +99,7 @@ func (p *Paragraph) InsertText(off int, s string, props CharProps) (int, error) 
 		return 0, nil
 	}
 	p.Text = p.Text[:off] + clean + p.Text[off:]
-	p.insertRun(off, len(clean), props.Clone())
+	p.insertRun(off, len(clean), props)
 	return len(clean), nil
 }
 
@@ -135,7 +115,7 @@ func (p *Paragraph) insertRun(off, n int, props CharProps) {
 			left := off - start
 			right := r.Len - left
 			p.Runs[i].Len = left
-			p.Runs = insertAt(p.Runs, i+1, Run{Len: right, Props: r.Props.Clone()})
+			p.Runs = insertAt(p.Runs, i+1, Run{Len: right, Props: r.Props})
 			idx = i + 1
 			break
 		}
@@ -177,7 +157,7 @@ func (p *Paragraph) Normalize() {
 		if l := len(out); l > 0 {
 			out[l-1].Len += n - end
 		} else {
-			out = append(out, Run{Len: n, Props: p.Mark.Clone()})
+			out = append(out, Run{Len: n, Props: p.Mark})
 		}
 	}
 	p.Runs = out
@@ -190,10 +170,6 @@ func satAdd(a, b int) int {
 	}
 	return a + b
 }
-
-// revisionKeys are the mark's own tracked-change fields, which a deletion never takes from the
-// deleted text.
-var revisionKeys = []string{"ins", "del", "fmtChange"}
 
 // Delete removes Text[a:b] (bytes, in either order), with the objects inside it.
 func (p *Paragraph) Delete(a, b int) error {
@@ -210,16 +186,13 @@ func (p *Paragraph) Delete(a, b int) error {
 	if (len(p.Runs) == 0 || a == 0) && b == len(p.Text) {
 		// Emptying: the mark keeps the deleted text's formatting, but stays its own tracked
 		// change (or not), whatever revision the deleted text was part of.
-		mark := p.PropsOfChar(a).Clone()
-		mark.Extra = mark.Extra.Clone()
-		for _, k := range revisionKeys {
-			mark.Extra.set(k, p.Mark.Extra[k])
-		}
+		mark := p.PropsOfChar(a)
+		mark.Ins, mark.Del, mark.FmtChange = p.Mark.Ins, p.Mark.Del, p.Mark.FmtChange
 		p.Mark = mark
 	}
 	if k0, k1 := p.objectsBefore(a), p.objectsBefore(b); k1 > k0 {
-		if objs := p.objects(); k1 <= len(objs) {
-			p.setObjects(append(objs[:k0:k0], objs[k1:]...))
+		if k1 <= len(p.Objects) {
+			p.Objects = append(p.Objects[:k0:k0], p.Objects[k1:]...)
 		}
 	}
 	p.Text = p.Text[:a] + p.Text[b:]
@@ -257,7 +230,7 @@ func (p *Paragraph) Format(a, b int, f func(*CharProps)) error {
 			if y <= x {
 				continue
 			}
-			props := r.Props.Clone()
+			props := r.Props
 			if x >= a && y <= b {
 				f(&props)
 			}

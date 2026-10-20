@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/computernut43/craft-libs/serdejson"
+
 	"github.com/computernut43/wordcraft/internal/rustref"
 )
 
@@ -106,13 +108,13 @@ func goAnswer(req map[string]any) string {
 		return `{"parse":"marshal"}`
 	}
 	var p Paragraph
-	if err := json.Unmarshal(raw, &p); err != nil {
+	if err := serdejson.Unmarshal(raw, &p); err != nil {
 		return fmt.Sprintf(`{"parse":%q}`, err.Error())
 	}
 	props := func(k string) CharProps {
 		var c CharProps
 		if b, err := json.Marshal(req[k]); err == nil && req[k] != nil {
-			_ = json.Unmarshal(b, &c)
+			_ = serdejson.Unmarshal(b, &c)
 		}
 		return c
 	}
@@ -139,8 +141,8 @@ func goAnswer(req map[string]any) string {
 			if set.Bold != nil {
 				c.Bold = set.Bold
 			}
-			if set.BoldCs != nil {
-				c.BoldCs = set.BoldCs
+			if set.BoldCS != nil {
+				c.BoldCS = set.BoldCS
 			}
 			if set.Italic != nil {
 				c.Italic = set.Italic

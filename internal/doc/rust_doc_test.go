@@ -3,7 +3,6 @@ package doc
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -35,8 +34,8 @@ func TestRustDocumentsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, rustJSON := range map[string][]byte{"sample": sampleJSON, "sample via docx": fromDocx} {
-		var d Document
-		if err := json.Unmarshal(rustJSON, &d); err != nil {
+		d, err := Unmarshal(rustJSON)
+		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		paras := 0
@@ -48,14 +47,13 @@ func TestRustDocumentsRoundTrip(t *testing.T) {
 		if paras < 10 {
 			t.Fatalf("%s: only %d paragraphs read", name, paras)
 		}
-		goJSON, err := json.Marshal(d)
+		goJSON, err := d.Marshal()
 		if err != nil {
 			t.Fatal(err)
 		}
-		want, err1 := rustref.NormalizeJSON(rustJSON)
-		got, err2 := rustref.NormalizeJSON(goJSON)
-		if err1 != nil || err2 != nil || !bytes.Equal(got, want) {
-			t.Fatalf("%s: Go's JSON differs from Rust's (%v %v)", name, err1, err2)
+		// Byte for byte: serde_json::to_vec_pretty's layout, field order and number spelling.
+		if !bytes.Equal(goJSON, rustJSON) {
+			t.Fatalf("%s: Go's JSON differs from Rust's:\n%s", name, firstDiff(goJSON, rustJSON))
 		}
 		// The Rust app reads what Go wrote as it reads its own file. (Not as the file itself:
 		// every save bumps the document's revision counter, core.revision.)
@@ -77,4 +75,14 @@ func TestRustDocumentsRoundTrip(t *testing.T) {
 			t.Fatalf("%s: Rust reads Go's JSON differently from its own", name)
 		}
 	}
+}
+
+// firstDiff shows where two outputs part.
+func firstDiff(a, b []byte) string {
+	i := 0
+	for i < len(a) && i < len(b) && a[i] == b[i] {
+		i++
+	}
+	from := max(i-200, 0)
+	return "go:   " + string(a[from:min(i+200, len(a))]) + "\nrust: " + string(b[from:min(i+200, len(b))])
 }

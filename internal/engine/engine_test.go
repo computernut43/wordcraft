@@ -83,7 +83,7 @@ func text(s *Session, i int) string { return s.Doc.Body[i].Para.Text }
 
 func bold(s *Session, i, off int) bool {
 	c := s.Doc.Body[i].Para.PropsOfChar(off)
-	return c.Bold != nil && *c.Bold && c.BoldCs != nil && *c.BoldCs
+	return c.Bold != nil && *c.Bold && c.BoldCS != nil && *c.BoldCS
 }
 
 func TestTypingAndUndo(t *testing.T) {
@@ -315,11 +315,11 @@ func TestTextInsertRefusals(t *testing.T) {
 
 func TestTrackChangesAndProtectionRefused(t *testing.T) {
 	s := session(t, "abc")
-	s.Doc.Extra = doc.Extra{"settings": json.RawMessage(`{"trackChanges":true}`)}
+	s.Doc.Settings = doc.Raw(`{"trackChanges":true}`)
 	if e := runErr(t, s, "text.insert", Params{"text": "x"}); e.Kind != NotPorted {
 		t.Fatalf("got %v", e)
 	}
-	s.Doc.Extra = doc.Extra{"settings": json.RawMessage(`{"protection":"readOnly"}`)}
+	s.Doc.Settings = doc.Raw(`{"protection":"readOnly"}`)
 	if e := runErr(t, s, "format.bold", Params{"value": true}); e.Kind != NotPorted {
 		t.Fatalf("got %v", e)
 	}
@@ -417,19 +417,19 @@ func TestOpenAndSave(t *testing.T) {
 }
 
 func TestStampSave(t *testing.T) {
-	d := &doc.Document{Extra: doc.Extra{
-		"core":     json.RawMessage(`{"revision":4294967295,"created":"","title":7}`),
-		"settings": json.RawMessage(`{"zoom":150,"trackChanges":false}`),
-	}}
+	d := &doc.Document{
+		Core:     doc.CoreProps{Revision: 4294967295, Title: "T"},
+		Settings: doc.Raw(`{"zoom":150,"trackChanges":false,"mirrorMargins":true}`),
+	}
 	if err := stampSave(d, "Ann", mustTime(t)); err != nil {
 		t.Fatal(err)
 	}
-	var core map[string]any
-	d.Extra.Get("core", &core)
-	if core["revision"] != float64(4294967295) || core["created"] != "2026-01-02T03:04:05Z" || core["title"] != "" {
-		t.Fatalf("core %v", core)
+	c := d.Core
+	if c.Revision != 4294967295 || c.Created != "2026-01-02T03:04:05Z" || c.Modified != c.Created || c.Title != "T" || c.LastModifiedBy != "Ann" {
+		t.Fatalf("core %+v", c)
 	}
-	if got := string(d.Extra["settings"]); got != `{"trackChanges":false}` {
+	// The zoom goes; the other settings stay, in their order.
+	if got := string(d.Settings); got != `{"trackChanges":false,"mirrorMargins":true}` {
 		t.Fatalf("settings %s", got)
 	}
 }
@@ -442,26 +442,24 @@ func mustTime(t testing.TB) time.Time {
 func TestTypedTextIsNotATrackedChange(t *testing.T) {
 	s := session(t, "abcd")
 	p := s.Doc.Body[0].Para
-	p.Runs[0].Props.Extra = doc.Extra{
-		"ins":       json.RawMessage(`{"author":"A","date":""}`),
-		"fmtChange": json.RawMessage(`{"author":"A"}`),
-		"rtl":       json.RawMessage(`true`),
-		"link":      json.RawMessage(`{"url":"https://example.org"}`),
-	}
+	on, link := true, "https://example.org"
+	p.Runs[0].Props.Ins = new(uint32)
+	p.Runs[0].Props.Del = new(uint32)
+	p.Runs[0].Props.FmtChange = &doc.PropChange[doc.CharProps]{Rev: 1}
+	p.Runs[0].Props.RTL = &on
+	p.Runs[0].Props.Link = &link
 	run(t, s, "select.range", `{"anchor":{"block":0,"off":2},"focus":{"block":0,"off":2}}`)
 	run(t, s, "text.insert", `{"text":"XY"}`)
 	runs := s.Doc.Body[0].Para.Runs
 	if len(runs) != 3 || runs[1].Len != 2 {
 		t.Fatalf("runs %+v", runs)
 	}
-	typed := runs[1].Props.Extra
-	for _, k := range []string{"ins", "fmtChange", "rtl"} {
-		if _, ok := typed[k]; ok {
-			t.Errorf("typed text has %q", k)
-		}
+	typed := runs[1].Props
+	if typed.Ins != nil || typed.Del != nil || typed.FmtChange != nil || typed.RTL != nil {
+		t.Errorf("typed text is a tracked change or right to left: %+v", typed)
 	}
 	// Typing inside a hyperlink extends it.
-	if _, ok := typed["link"]; !ok {
+	if typed.Link == nil || *typed.Link != link {
 		t.Error("typing inside a link left it")
 	}
 }
