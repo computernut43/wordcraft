@@ -373,7 +373,7 @@ func paraAnswer(d *Document, a Pos, op editOp) string {
 	sa, sb := p.SentenceAt(off)
 	var deleted []byteRangeJSON
 	for _, r := range p.DeletedRanges() {
-		deleted = append(deleted, byteRangeJSON{r.Start, r.End})
+		deleted = append(deleted, byteRangeJSON(r))
 	}
 	offs := p.ObjectOffsets()
 	if offs == nil {
