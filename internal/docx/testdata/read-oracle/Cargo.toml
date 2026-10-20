@@ -1,0 +1,19 @@
+[package]
+name = "read-oracle"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# The Rust reference for internal/docx's reader: crates/docx itself (by path), with every
+# dependency at the version the baseline workspace locks (Cargo.lock started from the baseline's).
+[dependencies]
+wordcraft-docx = { path = "../../../../crates/docx" }
+wordcraft-doc = { path = "../../../../crates/doc" }
+serde_json = "=1.0.151"
+serde = "=1.0.229"
+
+[workspace]
+
+[[bin]]
+name = "read-oracle"
+path = "src/main.rs"

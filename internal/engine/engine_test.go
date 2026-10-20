@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -358,8 +359,26 @@ func TestPanicBecomesErrorAndRestores(t *testing.T) {
 }
 
 func TestOpenAndSave(t *testing.T) {
-	if _, err := OpenBytes("x.docx", nil); err == nil || !strings.Contains(err.Error(), "not available in the Go port yet") {
+	if _, err := OpenBytes("x.odt", nil); err == nil || !strings.Contains(err.Error(), "not available in the Go port yet") {
 		t.Fatalf("got %v", err)
+	}
+	if _, err := OpenBytes("x.docx", nil); err == nil || !strings.Contains(err.Error(), "not a valid zip package") {
+		t.Fatalf("got %v", err)
+	}
+	var pkg bytes.Buffer
+	zw := zip.NewWriter(&pkg)
+	w, err := zw.Create("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = w.Write([]byte(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Hi</w:t></w:r></w:p></w:body></w:document>`))
+	_ = zw.Close()
+	d, err := OpenBytes("x.DOCX", pkg.Bytes())
+	if err != nil || len(d.Body) != 1 || d.Body[0].Para.Text != "Hi" {
+		t.Fatalf("a minimal package: %v", err)
+	}
+	if _, err := OpenBytes("x.docx", []byte("{\\rtf1}")); err == nil || !strings.Contains(err.Error(), "not available in the Go port yet") {
+		t.Fatalf("an RTF file named .docx: %v", err)
 	}
 	if _, err := OpenBytes("x.json", []byte(`{"body":`)); err == nil {
 		t.Fatal("truncated JSON opened")
@@ -373,7 +392,7 @@ func TestOpenAndSave(t *testing.T) {
 		t.Fatalf("a locked DATE field: %v", err)
 	}
 	// An empty body gets a paragraph to type in.
-	d, err := OpenBytes("x.JSON", []byte(`{"body":[]}`))
+	d, err = OpenBytes("x.JSON", []byte(`{"body":[]}`))
 	if err != nil || len(d.Body) != 1 || d.Body[0].Para == nil {
 		t.Fatalf("%v %+v", err, d)
 	}

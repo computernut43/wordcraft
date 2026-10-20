@@ -96,12 +96,13 @@ jobs:
       - name: Build the reference CLI
         working-directory: ${{ runner.temp }}/rust-baseline
         run: cargo build --release --locked -p wordcraft-cli
-      - name: Build the geom, doc, XML and package references
+      - name: Build the geom, doc, XML, package and reader references
         run: |
           cargo build --release --manifest-path internal/geom/testdata/rust-oracle/Cargo.toml
           cargo build --release --manifest-path internal/doc/testdata/rust-oracle/Cargo.toml
           cargo build --release --manifest-path internal/docx/testdata/xml-oracle/Cargo.toml
           cargo build --release --manifest-path internal/docx/testdata/package-oracle/Cargo.toml
+          cargo build --release --manifest-path internal/docx/testdata/read-oracle/Cargo.toml
       - name: Go tests against the reference
         env:
           WORDCRAFT_GEOM_RUST: ${{ github.workspace }}/internal/geom/testdata/rust-oracle/target/release/geom-oracle
@@ -115,6 +116,8 @@ jobs:
           WORDCRAFT_XML_CASES: "200000"
           WORDCRAFT_PACKAGE_RUST: ${{ github.workspace }}/internal/docx/testdata/package-oracle/target/release/package-oracle
           WORDCRAFT_PACKAGE_CASES: "30000"
+          WORDCRAFT_READ_RUST: ${{ github.workspace }}/internal/docx/testdata/read-oracle/target/release/read-oracle
+          WORDCRAFT_READ_CASES: "20000"
         run: |
           cli="$RUNNER_TEMP/rust-baseline/target/release/wordcraft-cli"
           sum="$(sha256sum "$cli" | cut -d' ' -f1)"
