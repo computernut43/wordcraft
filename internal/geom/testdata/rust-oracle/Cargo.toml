@@ -1,0 +1,10 @@
+[package]
+name = "geom-oracle"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+wordcraft-geom = { path = "../../../../crates/geom" }
+
+[workspace]

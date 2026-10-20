@@ -8,3 +8,9 @@ plan/
 /.claude/
 /target-*/
 /craft-fonts/
+
+# Local cross-repository Go development (craft-libs)
+/go.work
+/go.work.sum
+/internal/*/testdata/rust-oracle/target/
+/internal/*/testdata/rust-oracle/Cargo.lock
