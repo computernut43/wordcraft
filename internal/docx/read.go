@@ -240,7 +240,8 @@ func readOpened(pkg *Package) (*doc.Document, error) {
 		_ = r.readComments(p, ex, ids, cex)
 	}
 	// Bibliography sources live in a custom XML data store (b:Sources), related from the package
-	// root or the main part, or under the conventional customXml/itemN.xml names. Not ported.
+	// root or the main part; Word's own files sometimes leave the relationship out, so the
+	// conventional customXml/itemN.xml names are tried too. Each part is read at most once.
 	var bib []string
 	for _, rel := range append(slices.Clone(rootRels), rels...) {
 		if RelIs(rel.Kind, relCustomXMLRT) && !rel.External && !slices.Contains(bib, rel.Target) {
@@ -256,8 +257,12 @@ func readOpened(pkg *Package) (*doc.Document, error) {
 			bib = append(bib, path)
 		}
 	}
-	if len(bib) > 0 {
-		r.unported("custom XML parts (bibliography sources, data stores)")
+	seen := &bibSeen{tags: map[string]bool{}, untagged: map[[2]string]bool{}}
+	for _, path := range bib {
+		if len(d.Sources) >= maxSources {
+			break
+		}
+		r.readBibliography(path, seen)
 	}
 
 	if bg := root.Child("w:background"); bg != nil {
@@ -322,12 +327,8 @@ func readOpened(pkg *Package) (*doc.Document, error) {
 			r.readVBARelated(v)
 		}
 	}
-	for _, rel := range rels {
-		if !rel.External && RelIs(rel.Kind, RelGlossary) {
-			r.unported("glossary documents (building blocks)")
-			break
-		}
-	}
+	r.readGlossary(rels)
+	r.keepCustomXML(rootRels, rels)
 	r.keepUnmodelled(rootRels, rels)
 	if len(r.embedded) > 0 {
 		d.Passthrough = ensureMap(d.Passthrough)

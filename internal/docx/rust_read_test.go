@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -25,6 +26,15 @@ const (
 	EnvReadRust  = "WORDCRAFT_READ_RUST"
 	EnvReadCases = "WORDCRAFT_READ_CASES"
 )
+
+// glossaryReadValue matches the value of the glossary fingerprint in document JSON.
+var glossaryReadValue = regexp.MustCompile(`("wordcraft:glossary\.read": \[)[0-9,\s\\n]*(\])`)
+
+// maskGlossaryRead hides the glossary fingerprint's value (keeping whether there is one): Rust's
+// hashes a process-wide counter (see glossary.go), so it differs between any two reads.
+func maskGlossaryRead(s string) string {
+	return glossaryReadValue.ReplaceAllString(s, "${1}MASKED${2}")
+}
 
 // TestReadMatchesRust reads random .docx packages with Read and with crates/docx's read, and
 // compares the documents byte for byte (as JSON) or the error kinds. A package using something
@@ -46,36 +56,41 @@ func TestReadMatchesRust(t *testing.T) {
 		}
 	}
 	rng := rand.New(rand.NewPCG(11, 29))
-	cases := make([][]byte, n)
-	for i := range cases {
-		cases[i] = randomDocx(rng)
-	}
-	answers := askRead(t, bin, cases)
 	failures, compared, refused, errs := 0, 0, 0, 0
 	reasons := map[string]int{}
-	for i, c := range cases {
-		got := goRead(c)
-		if strings.HasPrefix(got, "REFUSED ") {
-			refused++
-			reasons[got]++
-			continue
+	// In batches, so memory stays bounded however many cases run (some documents are large).
+	const batch = 1000
+	for start := 0; start < n; start += batch {
+		cases := make([][]byte, min(batch, n-start))
+		for i := range cases {
+			cases[i] = randomDocx(rng)
 		}
-		compared++
-		if strings.HasPrefix(got, "ERR ") {
-			errs++
-		}
-		if got != answers[i] {
-			failures++
-			if failures <= 3 {
-				a, b := answers[i], got
-				at := 0
-				for at < len(a) && at < len(b) && a[at] == b[at] {
-					at++
-				}
-				from := max(at-400, 0)
-				t.Errorf("case %d (%d bytes) differs at byte %d:\nrust: …%.1200s\ngo:   …%.1200s", i, len(c), at, a[from:], b[from:])
-				if dir := os.Getenv("WORDCRAFT_READ_DUMP"); dir != "" {
-					_ = os.WriteFile(filepath.Join(dir, fmt.Sprintf("case%d.docx", i)), c, 0o644)
+		answers := askRead(t, bin, cases)
+		for j, c := range cases {
+			i := start + j
+			got := goRead(c)
+			if strings.HasPrefix(got, "REFUSED ") {
+				refused++
+				reasons[got]++
+				continue
+			}
+			compared++
+			if strings.HasPrefix(got, "ERR ") {
+				errs++
+			}
+			if got != answers[j] {
+				failures++
+				if failures <= 3 {
+					a, b := answers[j], got
+					at := 0
+					for at < len(a) && at < len(b) && a[at] == b[at] {
+						at++
+					}
+					from := max(at-400, 0)
+					t.Errorf("case %d (%d bytes) differs at byte %d:\nrust: …%.1200s\ngo:   …%.1200s", i, len(c), at, a[from:], b[from:])
+					if dir := os.Getenv("WORDCRAFT_READ_DUMP"); dir != "" {
+						_ = os.WriteFile(filepath.Join(dir, fmt.Sprintf("case%d.docx", i)), c, 0o644)
+					}
 				}
 			}
 		}
@@ -214,7 +229,7 @@ func askRead(t *testing.T, bin string, cases [][]byte) []string {
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	sc.Buffer(make([]byte, 1<<20), 1<<28)
 	for sc.Scan() {
-		lines = append(lines, sc.Text())
+		lines = append(lines, maskGlossaryRead(sc.Text()))
 	}
 	if len(lines) != len(cases) {
 		t.Fatalf("reference answered %d of %d packages", len(lines), len(cases))
@@ -225,7 +240,10 @@ func askRead(t *testing.T, bin string, cases [][]byte) []string {
 var errKindNames = map[ErrKind]string{ErrZip: "Zip", ErrLimit: "Limit", ErrXML: "Xml", ErrMissingPart: "MissingPart", ErrNotWord: "NotWord"}
 
 // goRead is the reference program's answer computed with Read.
-func goRead(b []byte) string {
+func goRead(b []byte) string { return maskGlossaryRead(goReadRaw(b)) }
+
+// goReadRaw is goRead without masking.
+func goReadRaw(b []byte) string {
 	d, err := Read(b)
 	if err != nil {
 		var e *Error
@@ -265,6 +283,8 @@ type docxGen struct {
 	sdtContent                                             bool
 	images                                                 []string
 	oles                                                   []string // relationship ids of OLE embeddings and links
+	inkCT                                                  bool     // the content types name an InkML part
+	glossaryCT                                             string   // the glossary part's content type override, if any
 	links                                                  []string // 65 external relationship ids, for an object at the id limit
 	txbxDepth                                              int
 	sdtStack                                               []bool
@@ -1832,6 +1852,80 @@ func (g *docxGen) textEffect() {
 	}
 }
 
+// bibSources is a b:Sources part with random sources: tags (repeated too), types, persons in
+// name lists or not, editors, accessed dates, and rarely more sources than are kept.
+func (g *docxGen) bibSources() string {
+	var b strings.Builder
+	ns := g.pick(`xmlns:b="http://schemas.openxmlformats.org/officeDocument/2006/bibliography"`, `xmlns:b="http://schemas.microsoft.com/office/word/2004/10/bibliography"`)
+	b.WriteString(`<b:Sources ` + ns + ` xmlns="http://schemas.openxmlformats.org/officeDocument/2006/bibliography"`)
+	if g.chance(2) {
+		b.WriteString(` ` + g.pick("StyleName", "b:StyleName") + `="` + xmlEsc(g.pick("APA", " MLA ", "", "  ", strings.Repeat("S", 80), "Chicago")) + `" SelectedStyle="\APA.XSL"`)
+	}
+	b.WriteString(`>`)
+	n := g.rng.IntN(5)
+	if g.chance(600) {
+		// More sources than are kept (rare: the documents are large).
+		n = 10_003
+	}
+	person := func() string {
+		return `<b:Person><b:Last>` + g.pick("Rivera", "Chen", "", "Okafor") + `</b:Last>` + g.pick("", `<b:First>Ada</b:First>`) + g.pick("", "", `<b:Middle>L.</b:Middle>`) + `</b:Person>`
+	}
+	names := func() string {
+		var p strings.Builder
+		k := g.rng.IntN(3)
+		if g.chance(2) {
+			p.WriteString(`<b:NameList>`)
+			for range k + 1 {
+				p.WriteString(person())
+			}
+			p.WriteString(`</b:NameList>`)
+			if g.chance(3) {
+				// A person beside the list too.
+				p.WriteString(person())
+			}
+		} else {
+			for range k {
+				p.WriteString(person())
+			}
+		}
+		return p.String()
+	}
+	for i := range n {
+		if n > 1000 {
+			b.WriteString(`<b:Source><b:Tag>T` + strconv.Itoa(i) + `</b:Tag></b:Source>`)
+			continue
+		}
+		b.WriteString(`<b:Source>`)
+		if !g.chance(4) {
+			b.WriteString(`<b:Tag>` + g.pick("Riv21", "Web19", "Riv21", "", "Chen") + `</b:Tag>`)
+		}
+		if g.chance(2) {
+			b.WriteString(`<b:SourceType>` + g.pick("Book", "JournalArticle", "InternetSite", " Misc ", "", "MadeUp", "booksection", "DocumentFromInternetSite") + `</b:SourceType>`)
+		}
+		switch g.rng.IntN(4) {
+		case 0:
+			b.WriteString(`<b:Author><b:Author>` + names() + `</b:Author>` + g.pick("", `<b:Editor>`+names()+`</b:Editor>`) + `</b:Author>`)
+		case 1:
+			b.WriteString(`<b:Author>` + names() + `</b:Author>`)
+		case 2:
+			b.WriteString(`<b:Editor>` + names() + `</b:Editor>`)
+		}
+		if g.chance(5) {
+			// An editor at the source's level as well.
+			b.WriteString(`<b:Editor><b:Person><b:Last>Outer</b:Last></b:Person></b:Editor>`)
+		}
+		for _, f := range []string{"Title", "Year", "Month", "Day", "City", "Publisher", "JournalName", "Edition", "Volume", "Issue", "Pages", "URL", "Accessed",
+			"YearAccessed", "MonthAccessed", "DayAccessed", "DOI", "StandardNumber"} {
+			if g.chance(3) {
+				b.WriteString(`<b:` + f + `>` + textEsc(g.pick("Shared Spaces", "2021", "x", " spaced ", "")) + `</b:` + f + `>`)
+			}
+		}
+		b.WriteString(`</b:Source>`)
+	}
+	b.WriteString(`<b:Other/></b:Sources>`)
+	return b.String()
+}
+
 // colorEl writes a DrawingML colour element with random modifiers.
 func (g *docxGen) colorEl() {
 	name := g.pick("a:srgbClr", "a:schemeClr", "a:sysClr", "a:prstClr", "a:hslClr", "a:srgbClr", "a:scrgbClr")
@@ -2222,6 +2316,60 @@ func (g *docxGen) part(limit int) {
 	g.n = 0
 	g.limit = limit
 	g.b.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+}
+
+// glossaryPart is a glossary document with random building blocks (sometimes the wrong root, and
+// rarely more entries than are kept).
+func (g *docxGen) glossaryPart() string {
+	g.part(150)
+	root := g.pick("w:glossaryDocument", "w:glossaryDocument", "w:glossaryDocument", "w:document")
+	g.b.WriteString(`<` + root + ` ` + nsDocs + `><w:docParts>`)
+	if g.chance(80) {
+		for i := range 10_003 {
+			g.b.WriteString(`<w:docPart><w:docPartPr><w:name w:val="E` + strconv.Itoa(i) + `"/></w:docPartPr><w:docPartBody><w:p><w:r><w:t>e</w:t></w:r></w:p></w:docPartBody></w:docPart>`)
+		}
+	}
+	for range 1 + g.rng.IntN(5) {
+		g.b.WriteString(`<w:docPart>`)
+		if !g.chance(8) {
+			g.b.WriteString(`<w:docPartPr>`)
+			if !g.chance(6) {
+				g.b.WriteString(`<w:name w:val="` + xmlEsc(g.pick("Signature", "", "Address", strings.Repeat("n", 1100))) + `"/>`)
+			}
+			if g.chance(2) {
+				g.b.WriteString(`<w:category>` + g.pick(`<w:name w:val="General"/>`, ``) + g.pick(`<w:gallery w:val="docParts"/>`, `<w:gallery w:val="autoTxt"/>`, ``) + `</w:category>`)
+			}
+			for _, f := range []string{"w:description", "w:guid", "w:style"} {
+				if g.chance(3) {
+					g.b.WriteString(`<` + f + ` w:val="` + xmlEsc(g.pick("x", "{1A2B}", "Normal", "")) + `"/>`)
+				}
+			}
+			if g.chance(2) {
+				g.b.WriteString(`<w:types>`)
+				for range g.rng.IntN(4) {
+					g.b.WriteString(`<w:type w:val="` + g.pick("bbPlcHdr", "normal", "bbPlcHdr", "bogus", "autoExp") + `"/>`)
+				}
+				g.b.WriteString(`</w:types>`)
+			}
+			if g.chance(3) {
+				g.b.WriteString(`<w:behaviors><w:behavior w:val="` + g.pick("content", "p", "pg", "x") + `"/><w:behavior w:val="p"/></w:behaviors>`)
+			}
+			g.b.WriteString(`</w:docPartPr>`)
+		}
+		switch g.rng.IntN(5) {
+		case 0:
+			// No body.
+		case 1:
+			g.b.WriteString(`<w:docPartBody/>`)
+		default:
+			g.b.WriteString(`<w:docPartBody>`)
+			g.blocks(1, 1+g.rng.IntN(2))
+			g.b.WriteString(`</w:docPartBody>`)
+		}
+		g.b.WriteString(`</w:docPart>`)
+	}
+	g.b.WriteString(`</w:docParts></` + root + `>`)
+	return g.b.String()
 }
 
 func (g *docxGen) stylesPart() string {
@@ -2787,12 +2935,55 @@ func randomDocx(rng *rand.Rand) []byte {
 		files["word/vbaProjectSignature.bin"] = "sig"
 		files["customXml/sig.xml"] = "<x/>"
 	}
-	if g.chance(g.exotic) {
-		add("customXml", "../customXml/item1.xml")
-		files["customXml/item1.xml"] = `<b:Sources xmlns:b="http://schemas.openxmlformats.org/officeDocument/2006/bibliography"/>`
+	if g.chance(3) {
+		// Custom XML: bibliography sources (related or only at the conventional names), data
+		// stores with parts of their own, native ink's part, an external one.
+		for i := range 1 + g.rng.IntN(3) {
+			name := "customXml/item" + strconv.Itoa(i+1) + ".xml"
+			switch g.rng.IntN(5) {
+			case 0, 1, 2:
+				files[name] = g.bibSources()
+			case 3:
+				files[name] = g.pick(`<root xmlns="urn:data"><v>1</v></root>`, `<root xmlns="urn:data" StyleName="Data"><Source><Tag>NotBib</Tag></Source></root>`)
+				files["customXml/_rels/item"+strconv.Itoa(i+1)+".xml.rels"] = relsXML([]relSpec{{"rId1", relBase + "customXmlProps", "itemProps" + strconv.Itoa(i+1) + ".xml", ""}})
+				files["customXml/itemProps"+strconv.Itoa(i+1)+".xml"] = `<ds:datastoreItem xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml" ds:itemID="{X}"/>`
+			default:
+				files[name] = `<b:Sources xmlns:b="http://schemas.openxmlformats.org/officeDocument/2006/bibliography"><b:Source><b:Tag>bad` // broken XML
+			}
+			switch g.rng.IntN(4) {
+			case 0:
+				// Only at the conventional name.
+			case 1:
+				rootRels = append(rootRels, relSpec{"rIdX" + strconv.Itoa(i), relBase + "customXml", name, ""})
+			default:
+				add("customXml", "../"+name)
+			}
+		}
+		if g.chance(4) {
+			add("customXml", "../customXml/ink1.xml")
+			files["customXml/ink1.xml"] = `<inkml:ink xmlns:inkml="http://www.w3.org/2003/InkML"/>`
+			g.inkCT = true
+		}
+		if g.chance(5) {
+			docRels = append(docRels, relSpec{"rIdXe", relBase + "customXml", g.pick("https://example.com/data.xml", "customXml/item1.xml"), "External"})
+		}
 	}
-	if g.chance(g.exotic) {
-		add("glossaryDocument", "glossary/document.xml")
+
+	if g.chance(2) {
+		// A glossary: its own part (or the main part, or missing), sometimes not one at all.
+		target := g.pick("glossary/document.xml", "glossary/document.xml", "glossary/document.xml", "document.xml", "glossary/missing.xml")
+		add("glossaryDocument", target)
+		if g.chance(4) {
+			add("glossaryDocument", "glossary/second.xml")
+		}
+		files["word/glossary/document.xml"] = g.glossaryPart()
+		files["word/glossary/second.xml"] = g.glossaryPart()
+		switch g.rng.IntN(3) {
+		case 0:
+			g.glossaryCT = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.glossary+xml"
+		case 1:
+			g.glossaryCT = "application/xml"
+		}
 	}
 	// the main part
 	g.part(250)
@@ -2856,6 +3047,12 @@ func randomDocx(rng *rand.Rand) []byte {
 	ct := `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>`
 	if g.chance(2) {
 		ct += `<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/fonts/font1.odttf" ContentType="application/vnd.openxmlformats-officedocument.obfuscatedFont"/>`
+	}
+	if g.glossaryCT != "" {
+		ct += `<Override PartName="/word/glossary/document.xml" ContentType="` + g.glossaryCT + `"/>`
+	}
+	if g.inkCT {
+		ct += `<Override PartName="/customXml/ink1.xml" ContentType="application/inkml+xml"/>`
 	}
 	files["[Content_Types].xml"] = ct + `</Types>`
 	if g.chance(60) {
