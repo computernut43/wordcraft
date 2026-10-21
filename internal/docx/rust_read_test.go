@@ -463,9 +463,7 @@ func (g *docxGen) rPr(mark, change bool) {
 				g.leaf(g.pick("w:ins", "w:del", "w:moveTo", "w:moveFrom"), g.author()...)
 			}
 		case 19:
-			if g.chance(g.exotic) {
-				g.leaf("w14:textOutline", ga{"w14:w", g.num()})
-			}
+			g.textEffect()
 		case 20:
 			g.leaf("w:effect", ga{"w:val", g.enum("blinkBackground")})
 		default:
@@ -1752,6 +1750,88 @@ func (g *docxGen) customProps() string {
 	return b.String()
 }
 
+// w14Color writes a w14 colour (srgb or scheme) with random modifiers.
+func (g *docxGen) w14Color() {
+	if g.chance(8) {
+		return
+	}
+	name := g.pick("w14:srgbClr", "w14:schemeClr", "w14:prstClr")
+	val := g.pick(colorPool...)
+	if name == "w14:schemeClr" {
+		val = g.pick("accent1", "tx1", "bg2", "phClr", "hlink", "x")
+	}
+	g.b.WriteString(`<` + name)
+	if !g.chance(10) {
+		g.b.WriteString(` w14:val="` + xmlEsc(val) + `"`)
+	}
+	g.b.WriteString(`>`)
+	for range g.rng.IntN(3) {
+		g.b.WriteString(`<w14:` + g.pick("lumMod", "lumOff", "alpha", "tint") + ` w14:val="` + g.pick("75000", "25000", "-30000", "2000000", "x", "100000", "50000") + `"/>`)
+	}
+	g.b.WriteString(`</` + name + `>`)
+}
+
+// w14Fill writes a w14 fill: none, solid, or a gradient with random stops.
+func (g *docxGen) w14Fill() {
+	switch g.rng.IntN(4) {
+	case 0:
+		g.b.WriteString(`<w14:noFill/>`)
+	case 1, 2:
+		g.b.WriteString(`<w14:solidFill>`)
+		g.w14Color()
+		g.b.WriteString(`</w14:solidFill>`)
+	default:
+		g.b.WriteString(`<w14:gradFill><w14:gsLst>`)
+		n := g.rng.IntN(5)
+		if g.chance(10) {
+			n = 14
+		}
+		for range n {
+			g.b.WriteString(`<w14:gs w14:pos="` + g.pick("0", "50000", "100000", "-5", "200000", "x", "33333") + `">`)
+			g.w14Color()
+			g.b.WriteString(`</w14:gs>`)
+		}
+		g.b.WriteString(`</w14:gsLst>`)
+		if g.chance(2) {
+			g.b.WriteString(`<w14:lin w14:ang="` + g.pick("5400000", "0", "-5400000", "99999999999", "x", "21600000") + `" w14:scaled="0"/>`)
+		}
+		g.b.WriteString(`</w14:gradFill>`)
+	}
+}
+
+// textEffect writes one w14 run text effect (WordArt) with hostile values.
+func (g *docxGen) textEffect() {
+	emu := func() string { return g.pick("12700", "0", "-5", "99999999999", "x", "38100", "1in", "1e400") }
+	switch g.rng.IntN(7) {
+	case 0:
+		g.b.WriteString(`<w14:textFill>`)
+		if !g.chance(6) {
+			g.w14Fill()
+		}
+		g.b.WriteString(`</w14:textFill>`)
+	case 1:
+		g.b.WriteString(`<w14:textOutline w14:w="` + emu() + `" w14:cap="flat">`)
+		if !g.chance(4) {
+			g.w14Fill()
+		}
+		g.b.WriteString(`</w14:textOutline>`)
+	case 2:
+		g.b.WriteString(`<w14:shadow w14:blurRad="` + emu() + `" w14:dist="` + emu() + `" w14:dir="` + g.pick("2700000", "-5400000", "x", "21600000") + `">`)
+		g.w14Color()
+		g.b.WriteString(`</w14:shadow>`)
+	case 3:
+		g.b.WriteString(`<w14:glow w14:rad="` + emu() + `">`)
+		g.w14Color()
+		g.b.WriteString(`</w14:glow>`)
+	case 4:
+		g.b.WriteString(`<w14:reflection w14:blurRad="` + emu() + `" w14:stA="` + g.pick("52000", "-5", "200000", "x") + `"` + g.pick(` w14:endPos="35000"`, ` w14:endPos="0"`, ` w14:endPos="100001"`, "") + ` w14:dist="` + emu() + `"/>`)
+	case 5:
+		g.leaf("w14:ligatures", ga{"w14:val", g.enum("standard", "all", "none")})
+	default:
+		g.b.WriteString(g.pick(`<w14:cntxtAlts/>`, `<w14:numForm w14:val="lining"/>`, `<w14:props3d w14:extrusionH="0"/>`))
+	}
+}
+
 // colorEl writes a DrawingML colour element with random modifiers.
 func (g *docxGen) colorEl() {
 	name := g.pick("a:srgbClr", "a:schemeClr", "a:sysClr", "a:prstClr", "a:hslClr", "a:srgbClr", "a:scrgbClr")
@@ -2356,9 +2436,20 @@ func (g *docxGen) settingsPart() string {
 		case 8:
 			g.b.WriteString(`<w:rsids><w:rsidRoot w:val="00A1B2C3"/></w:rsids>`)
 		case 9:
-			if g.chance(g.exotic) {
-				g.b.WriteString(`<m:mathPr><m:mathFont m:val="Cambria Math"/></m:mathPr>`)
+			g.b.WriteString(`<m:mathPr><m:mathFont m:val="Cambria Math"/>`)
+			for _, c := range []struct{ name, pool string }{
+				{"m:brkBin", "after|repeat|before|x|After"}, {"m:brkBinSub", "-+|+-|--|x"},
+				{"m:wrapIndent", "1440|0|-5|99999999|x|1in|1e400"}, {"m:wrapRight", " off |0|1|true|FALSE|False|on|"},
+			} {
+				if g.chance(2) {
+					g.b.WriteString(`<` + c.name)
+					if !g.chance(6) {
+						g.b.WriteString(` m:val="` + xmlEsc(g.pick(strings.Split(c.pool, "|")...)) + `"`)
+					}
+					g.b.WriteString(`/>`)
+				}
 			}
+			g.b.WriteString(`</m:mathPr>`)
 		default:
 			g.leaf(g.pick("w:proofState", "w:characterSpacingControl", "w:displayBackgroundShape"), ga{"w:val", g.enum("doNotCompress", "clean")})
 		}

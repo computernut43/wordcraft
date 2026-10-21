@@ -121,15 +121,6 @@ type PropCtx struct {
 	Alias map[string]string
 	// Theme are the theme's colours (for WordArt effects in theme colours).
 	Theme []doc.RGB
-
-	// err is the first feature met that isn't ported yet.
-	err error
-}
-
-func (pc *PropCtx) unported(format string, args ...any) {
-	if pc.err == nil {
-		pc.err = notPorted(format, args...)
-	}
 }
 
 // levelOnly marks a w:numPr that gives a level (w:ilvl) and no list (w:numId): the list is the one
@@ -491,8 +482,13 @@ func (pc *PropCtx) RPr(e *El) doc.CharProps {
 			}
 		default:
 			if strings.HasPrefix(k.Name, "w14:") {
-				// Run text effects (WordArt): read by wordart.rs, not ported yet.
-				pc.unported("run text effect %s", k.Name)
+				if c.TextEffects == nil {
+					c.TextEffects = &doc.TextEffects{}
+				}
+				readTextEffect(k, pc.Theme, c.TextEffects)
+				if c.TextEffects.IsEmpty() {
+					c.TextEffects = nil
+				}
 			}
 		}
 	}

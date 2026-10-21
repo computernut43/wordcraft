@@ -338,9 +338,6 @@ func readOpened(pkg *Package) (*doc.Document, error) {
 	if r.shapeIDs {
 		keepGluedIDs(d, r.glued)
 	}
-	if r.err == nil {
-		r.err = r.pc.err
-	}
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -1377,7 +1374,7 @@ func (r *reader) readSettings(path string) error {
 				}
 			}
 		case "m:mathPr":
-			r.unported("math settings (m:mathPr)")
+			s.Math = ptr(readMathPr(k))
 		case "w:mirrorMargins":
 			s.MirrorMargins = onOff(k)
 		case "w:autoHyphenation":
