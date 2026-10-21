@@ -327,12 +327,7 @@ func readOpened(pkg *Package) (*doc.Document, error) {
 			r.readVBARelated(v)
 		}
 	}
-	for _, rel := range rels {
-		if !rel.External && RelIs(rel.Kind, RelGlossary) {
-			r.unported("glossary documents (building blocks)")
-			break
-		}
-	}
+	r.readGlossary(rels)
 	r.keepCustomXML(rootRels, rels)
 	r.keepUnmodelled(rootRels, rels)
 	if len(r.embedded) > 0 {

@@ -114,3 +114,26 @@ func vmlPackage(body, header string) []byte {
 	_ = zw.Close()
 	return out.Bytes()
 }
+
+// vmlPackageWith is a minimal package with extra parts and one extra document relationship.
+func vmlPackageWith(extra map[string]string, rel relSpec) []byte {
+	files := map[string]string{
+		"_rels/.rels":                  relsXML([]relSpec{{"rId1", relBase + "officeDocument", "word/document.xml", ""}}),
+		"word/document.xml":            `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ` + nsDocs + `><w:body><w:p/></w:body></w:document>`,
+		"word/_rels/document.xml.rels": relsXML([]relSpec{rel}),
+	}
+	for k, v := range extra {
+		files[k] = v
+	}
+	var out bytes.Buffer
+	zw := zip.NewWriter(&out)
+	for n, c := range files {
+		w, err := zw.Create(n)
+		if err != nil {
+			return nil
+		}
+		_, _ = w.Write([]byte(c))
+	}
+	_ = zw.Close()
+	return out.Bytes()
+}

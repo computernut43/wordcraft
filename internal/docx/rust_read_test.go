@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -25,6 +26,15 @@ const (
 	EnvReadRust  = "WORDCRAFT_READ_RUST"
 	EnvReadCases = "WORDCRAFT_READ_CASES"
 )
+
+// glossaryReadValue matches the value of the glossary fingerprint in document JSON.
+var glossaryReadValue = regexp.MustCompile(`("wordcraft:glossary\.read": \[)[0-9,\s\\n]*(\])`)
+
+// maskGlossaryRead hides the glossary fingerprint's value (keeping whether there is one): Rust's
+// hashes a process-wide counter (see glossary.go), so it differs between any two reads.
+func maskGlossaryRead(s string) string {
+	return glossaryReadValue.ReplaceAllString(s, "${1}MASKED${2}")
+}
 
 // TestReadMatchesRust reads random .docx packages with Read and with crates/docx's read, and
 // compares the documents byte for byte (as JSON) or the error kinds. A package using something
@@ -219,7 +229,7 @@ func askRead(t *testing.T, bin string, cases [][]byte) []string {
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	sc.Buffer(make([]byte, 1<<20), 1<<28)
 	for sc.Scan() {
-		lines = append(lines, sc.Text())
+		lines = append(lines, maskGlossaryRead(sc.Text()))
 	}
 	if len(lines) != len(cases) {
 		t.Fatalf("reference answered %d of %d packages", len(lines), len(cases))
@@ -230,7 +240,10 @@ func askRead(t *testing.T, bin string, cases [][]byte) []string {
 var errKindNames = map[ErrKind]string{ErrZip: "Zip", ErrLimit: "Limit", ErrXML: "Xml", ErrMissingPart: "MissingPart", ErrNotWord: "NotWord"}
 
 // goRead is the reference program's answer computed with Read.
-func goRead(b []byte) string {
+func goRead(b []byte) string { return maskGlossaryRead(goReadRaw(b)) }
+
+// goReadRaw is goRead without masking.
+func goReadRaw(b []byte) string {
 	d, err := Read(b)
 	if err != nil {
 		var e *Error
@@ -271,6 +284,7 @@ type docxGen struct {
 	images                                                 []string
 	oles                                                   []string // relationship ids of OLE embeddings and links
 	inkCT                                                  bool     // the content types name an InkML part
+	glossaryCT                                             string   // the glossary part's content type override, if any
 	links                                                  []string // 65 external relationship ids, for an object at the id limit
 	txbxDepth                                              int
 	sdtStack                                               []bool
@@ -2304,6 +2318,60 @@ func (g *docxGen) part(limit int) {
 	g.b.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
 }
 
+// glossaryPart is a glossary document with random building blocks (sometimes the wrong root, and
+// rarely more entries than are kept).
+func (g *docxGen) glossaryPart() string {
+	g.part(150)
+	root := g.pick("w:glossaryDocument", "w:glossaryDocument", "w:glossaryDocument", "w:document")
+	g.b.WriteString(`<` + root + ` ` + nsDocs + `><w:docParts>`)
+	if g.chance(80) {
+		for i := range 10_003 {
+			g.b.WriteString(`<w:docPart><w:docPartPr><w:name w:val="E` + strconv.Itoa(i) + `"/></w:docPartPr><w:docPartBody><w:p><w:r><w:t>e</w:t></w:r></w:p></w:docPartBody></w:docPart>`)
+		}
+	}
+	for range 1 + g.rng.IntN(5) {
+		g.b.WriteString(`<w:docPart>`)
+		if !g.chance(8) {
+			g.b.WriteString(`<w:docPartPr>`)
+			if !g.chance(6) {
+				g.b.WriteString(`<w:name w:val="` + xmlEsc(g.pick("Signature", "", "Address", strings.Repeat("n", 1100))) + `"/>`)
+			}
+			if g.chance(2) {
+				g.b.WriteString(`<w:category>` + g.pick(`<w:name w:val="General"/>`, ``) + g.pick(`<w:gallery w:val="docParts"/>`, `<w:gallery w:val="autoTxt"/>`, ``) + `</w:category>`)
+			}
+			for _, f := range []string{"w:description", "w:guid", "w:style"} {
+				if g.chance(3) {
+					g.b.WriteString(`<` + f + ` w:val="` + xmlEsc(g.pick("x", "{1A2B}", "Normal", "")) + `"/>`)
+				}
+			}
+			if g.chance(2) {
+				g.b.WriteString(`<w:types>`)
+				for range g.rng.IntN(4) {
+					g.b.WriteString(`<w:type w:val="` + g.pick("bbPlcHdr", "normal", "bbPlcHdr", "bogus", "autoExp") + `"/>`)
+				}
+				g.b.WriteString(`</w:types>`)
+			}
+			if g.chance(3) {
+				g.b.WriteString(`<w:behaviors><w:behavior w:val="` + g.pick("content", "p", "pg", "x") + `"/><w:behavior w:val="p"/></w:behaviors>`)
+			}
+			g.b.WriteString(`</w:docPartPr>`)
+		}
+		switch g.rng.IntN(5) {
+		case 0:
+			// No body.
+		case 1:
+			g.b.WriteString(`<w:docPartBody/>`)
+		default:
+			g.b.WriteString(`<w:docPartBody>`)
+			g.blocks(1, 1+g.rng.IntN(2))
+			g.b.WriteString(`</w:docPartBody>`)
+		}
+		g.b.WriteString(`</w:docPart>`)
+	}
+	g.b.WriteString(`</w:docParts></` + root + `>`)
+	return g.b.String()
+}
+
 func (g *docxGen) stylesPart() string {
 	g.part(150)
 	g.b.WriteString(`<w:styles ` + nsDocs + `>`)
@@ -2901,8 +2969,21 @@ func randomDocx(rng *rand.Rand) []byte {
 		}
 	}
 
-	if g.chance(g.exotic) {
-		add("glossaryDocument", "glossary/document.xml")
+	if g.chance(2) {
+		// A glossary: its own part (or the main part, or missing), sometimes not one at all.
+		target := g.pick("glossary/document.xml", "glossary/document.xml", "glossary/document.xml", "document.xml", "glossary/missing.xml")
+		add("glossaryDocument", target)
+		if g.chance(4) {
+			add("glossaryDocument", "glossary/second.xml")
+		}
+		files["word/glossary/document.xml"] = g.glossaryPart()
+		files["word/glossary/second.xml"] = g.glossaryPart()
+		switch g.rng.IntN(3) {
+		case 0:
+			g.glossaryCT = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.glossary+xml"
+		case 1:
+			g.glossaryCT = "application/xml"
+		}
 	}
 	// the main part
 	g.part(250)
@@ -2966,6 +3047,9 @@ func randomDocx(rng *rand.Rand) []byte {
 	ct := `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>`
 	if g.chance(2) {
 		ct += `<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/fonts/font1.odttf" ContentType="application/vnd.openxmlformats-officedocument.obfuscatedFont"/>`
+	}
+	if g.glossaryCT != "" {
+		ct += `<Override PartName="/word/glossary/document.xml" ContentType="` + g.glossaryCT + `"/>`
 	}
 	if g.inkCT {
 		ct += `<Override PartName="/customXml/ink1.xml" ContentType="application/inkml+xml"/>`
