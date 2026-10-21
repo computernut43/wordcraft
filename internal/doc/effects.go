@@ -1,6 +1,10 @@
 package doc
 
 import (
+	"cmp"
+	"math"
+	"slices"
+
 	"github.com/computernut43/craft-libs/serdejson"
 )
 
@@ -186,3 +190,42 @@ func (Glow) SerdeDefault() {}
 
 // SetDefaults sets the Rust Default.
 func (g *Glow) SetDefaults() { *g = Glow{Color: RGB{0x15, 0x60, 0x82}, Size: 5, Transparency: 60} }
+
+// MaxStops is the most gradient stops a text fill keeps.
+const MaxStops = 10
+
+// Sanitized is the fill finite and in range: at most MaxStops stops, in order; a gradient without
+// stops is no gradient (false).
+func (f TextFill) Sanitized() (TextFill, bool) {
+	switch f.Kind {
+	case FillNone:
+		return TextFill{Kind: FillNone}, true
+	case FillSolid:
+		return TextFill{Kind: FillSolid, Color: f.Color, Transparency: effectClamp(f.Transparency, 0, 100, 0)}, true
+	}
+	stops := Vec[GradStop]{}
+	for _, g := range f.Stops[:min(len(f.Stops), MaxStops)] {
+		stops = append(stops, GradStop{Pos: effectClamp(g.Pos, 0, 100, 0), Color: g.Color, Transparency: effectClamp(g.Transparency, 0, 100, 0)})
+	}
+	if len(stops) == 0 {
+		return TextFill{}, false
+	}
+	// Rust's sort_by(total_cmp): stable, -0 before 0.
+	slices.SortStableFunc(stops, func(a, b GradStop) int { return totalCmp32(float32(a.Pos), float32(b.Pos)) })
+	// f32::rem_euclid(360): the remainder is exact; a negative one is shifted up.
+	a := float32(effectClamp(f.Angle, -1e6, 1e6, 0))
+	r := float32(math.Mod(float64(a), 360))
+	if r < 0 {
+		r += 360
+	}
+	return TextFill{Kind: FillGradient, Stops: stops, Angle: F32(r)}, true
+}
+
+// totalCmp32 is Rust's f32::total_cmp.
+func totalCmp32(a, b float32) int {
+	key := func(f float32) int32 {
+		i := int32(math.Float32bits(f))
+		return i ^ int32(uint32(i>>31)>>1)
+	}
+	return cmp.Compare(key(a), key(b))
+}
